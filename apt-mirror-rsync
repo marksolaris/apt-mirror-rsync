@@ -1,0 +1,1123 @@
+#!/bin/perl
+
+# Program     : apt-mirror-rsync
+# Version     : 1.01
+# Author      : Mark : mark at ibiblio dot org
+# Created     : 2026-05-29
+# Updated     : 2026-07-04
+# Purpose     : Tool to rsync remote APT repositories to local disk.
+#               Enhanced per-repo config, statistics and monitoring.
+
+$CONF_FILE = "/etc/apt/apt-mirror-rsync.conf";
+&read_conf_file;
+
+# Ensure variables are populated, otherwise things will break.
+if (not length($LOGFILE))          { die "ERR: variable LOGFILE empty"; }
+if (not length($RSYNC_CONFIG_DIR)) { die "ERR: variable RSYNC_CONFIG_DIR empty"; }
+if (not length($DIST_WORK_DIR))    { die "ERR: variable DIST_WORK_DIR empty"; }
+if (not length($APT_MIRROR_DIR))   { die "ERR: variable APT_MIRROR_DIR empty"; }
+if (not length($FILE_OWNERSHIP))   { die "ERR: variable FILE_OWNERSHIP empty"; }
+if (not length($KEEP_DEFAULT))     { die "ERR: variable KEEP_DEFAULT empty"; }
+if ($FILE_OWNERSHIP !~ m/\w+:\w+/) { die "ERR: variable FILE_OWNERSHIP incorrect"; } # Must be user:group
+
+&log("apt-mirror-rsync started");
+
+# Make any missing directories, happens on the first run
+`mkdir -p $RSYNC_CONFIG_DIR`;
+`mkdir -p $APT_MIRROR_DIR`;
+`mkdir -p ${DIST_WORK_DIR}/work_files`;
+
+use Data::Dumper;
+$Data::Dumper::Sortkeys = 1;
+### Useful, but not installed by default. See `corelist -v v5.39.5`
+### use Devel::Size qw(size total_size);
+$start_sec = time;
+$debug = 0;
+$debug_files = 0;
+$debug_rsync = 0;
+$dry_run = 0;
+$verbose = 0;
+$progress = 0;
+$dist_stat = 0;
+$force = 0;
+$list = 0;
+$show_times = 0;
+$skip_zero = 0;
+$skip_mirror = 0;
+$dist_stat_repo = "";
+$config = 0;
+$config_mirror = "";
+$remove = 0;
+$remove_repo = "";
+$argc = scalar @ARGV;
+%REPOS = ();
+$EXCLUDE_DIST_COPY{'example.com'} = 1;
+# proxmox keeps 22 dist files and 8133 binary deb files in dists.
+$SPECIAL_DIST_COPY{'download.proxmox.com'} = 1;
+foreach $exe ('rsync', 'gunzip', 'xzcat') {
+    my $exe_check = `which ${exe}`;
+    chomp($exe_check);
+    if ($exe_check =~ m/not found/) { &error("${exe} not installed"); }
+}
+&parse_args;
+&reset_logfile($LOGFILE);
+&import_configs($RSYNC_CONFIG_DIR);
+if (not $skip_mirror) {
+    if (not scalar keys %REPOS) {
+        &error("No configuration supplied in ${RSYNC_CONFIG_DIR}");
+    }
+    foreach my $remote_host (sort keys %REPOS) {
+        next if (defined($EXCLUDE_DIST_COPY{$remote_host}));
+        &process_rsync_mirror_config_file($remote_host, "normal");
+    }
+} else {
+    if ($config)    { &show_configs("show", $config_mirror); }
+    if ($list)      { &show_configs("list"); }
+    if ($dist_stat) { &dist_stat($dist_stat_repo); }
+    if ($remove)    { print STDOUT "Not yet implemented\n"; }
+}
+my $end_sec = time;
+my $time_taken_pretty = &sec_to_dhms($end_sec - $start_sec);
+if ($debug) { &log("DEBUG: exiting normally. Time taken is ${time_taken_pretty}."); }
+if ($progress && (not $skip_mirror)) {
+    my $time_now = "";
+    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+    print STDOUT "${time_now}Finished all mirroring after ${time_taken_pretty}\n";
+}
+exit(0);
+
+############################################################################
+#####################         Subroutines          #########################
+############################################################################
+
+sub read_conf_file {
+    open(CONF, $CONF_FILE) || die "Config file ${CONF_FILE} is missing\n";
+    while ($conf_line = <CONF>) {
+        chomp($conf_line);
+        if ($conf_line =~ m/^RSYNC_CONFIG_DIR\s+/) {
+            $conf_line =~ s/^RSYNC_CONFIG_DIR\s+//;
+            $RSYNC_CONFIG_DIR = $conf_line;
+        }
+        if ($conf_line =~ m/^DIST_WORK_DIR\s+/) {
+            $conf_line =~ s/^DIST_WORK_DIR\s+//;
+            $DIST_WORK_DIR = $conf_line;
+        }
+        if ($conf_line =~ m/^APT_MIRROR_DIR\s+/) {
+            $conf_line =~ s/^APT_MIRROR_DIR\s+//;
+            $APT_MIRROR_DIR = $conf_line;
+        }
+        if ($conf_line =~ m/^LOGFILE\s+/) {
+            $conf_line =~ s/^LOGFILE\s+//;
+            $LOGFILE = $conf_line;
+        }
+        if ($conf_line =~ m/^FILE_OWNERSHIP\s+/) {
+            $conf_line =~ s/^FILE_OWNERSHIP\s+//;
+            $FILE_OWNERSHIP = $conf_line;
+        }
+        if ($conf_line =~ m/^KEEP_DEFAULT\s+/) {
+            $conf_line =~ s/^KEEP_DEFAULT\s+//;
+            $KEEP_DEFAULT = $conf_line;
+        }
+    }
+}
+
+sub usage {
+    print STDOUT "usage: $0 -h | -c | -d | -f | -l | -p | -r | -s | -t | -v | -z\n";
+    print STDOUT "  -h | --help               : this help\n";
+    print STDOUT "  -c | --config [<mirror>]  : show one/all mirror configs\n";
+    print STDOUT "  -d | --debug              : debug activity\n";
+    print STDOUT "       --debug=files        : debug file activity\n";
+    print STDOUT "       --debug=rsync        : debug rsync status\n";
+    print STDOUT "       --dry-run            : print out what would occur\n";
+    print STDOUT "  -f | --force              : force destructive action\n";
+    print STDOUT "  -l | --list-mirrors       : list configured mirrors\n";
+    print STDOUT "  -p | --progress           : show progress\n";
+    print STDOUT "  -r | --dist-remove <repo> : remove files for a repo\n";
+    print STDOUT "  -s | --dist-stat [<repo>] : show one/all repo stats\n";
+    print STDOUT "  -t | --times              : show date and time stamps\n";
+    print STDOUT "  -v | --verbose            : display more information\n";
+    print STDOUT "  -z | --ignore-zero        : only show when binaries update\n";
+}
+
+sub parse_args {
+    for ($cnt = 0; $cnt < $argc; $cnt++) {
+        if (($ARGV[$cnt] eq '-h') || ($ARGV[$cnt] eq '--help')) {
+            &usage;
+            exit(0);
+        }
+        if (($ARGV[$cnt] eq '-d') || ($ARGV[$cnt] =~ m/--debug/)) {
+            $debug++;
+            if ($ARGV[$cnt] =~ m/=/) {
+                my $debug_args = $ARGV[$cnt];
+                if ($debug_args =~ m/files/) { $debug_files++; }
+                if ($debug_args =~ m/rsync/) { $debug_rsync++; }
+            }
+            next;
+        }
+        if (($ARGV[$cnt] eq '--dry-run')) {
+            $dry_run++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-f') || ($ARGV[$cnt] eq '--force')) {
+            $force++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-l') || ($ARGV[$cnt] eq '--list-mirrors')) {
+            $skip_mirror++;
+            $list++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-v') || ($ARGV[$cnt] eq '--verbose')) {
+            $verbose++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-p') || ($ARGV[$cnt] eq '--progress')) {
+            $progress++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-t') || ($ARGV[$cnt] eq '--times')) {
+            $show_times++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-z') || ($ARGV[$cnt] eq '--ignore-zero')) {
+            $skip_zero++;
+            next;
+        }
+        if (($ARGV[$cnt] eq '-c') || ($ARGV[$cnt] eq '--config')) {
+            $config++;
+            $skip_mirror++; # Don't show configs and then mirror too
+            if (defined($ARGV[($cnt + 1)])) {
+                my $next_arg = $ARGV[($cnt + 1)];
+                if ($next_arg !~ m/^\-/) { # If not an arg, use it
+                    $config_mirror = $next_arg;
+                    $cnt++;
+                }
+            }
+            next;
+        }
+        if (($ARGV[$cnt] eq '-s') || ($ARGV[$cnt] eq '--dist-stat')) {
+            $dist_stat++;
+            $skip_mirror++;
+            if (defined($ARGV[($cnt + 1)])) {
+                my $next_repo = $ARGV[($cnt + 1)];
+                if ($next_repo !~ m/^\-/) { # If not an arg, use it 
+                    $dist_stat_repo = $next_repo;
+                    $cnt++;
+                }
+            }
+            next;
+        }
+        if (($ARGV[$cnt] eq '-r') || ($ARGV[$cnt] eq '--dist-remove')) {
+            $remove++;
+            $skip_mirror++;
+            if (defined($ARGV[($cnt + 1)])) {
+                my $next_repo = $ARGV[($cnt + 1)];
+                if ($next_repo !~ m/^\-/) { # If not an arg, use it
+                    $remove_repo = $next_repo;
+                    $cnt++;
+                }
+            }
+            next;
+        }
+        &error("Unknown arg: $ARGV[$cnt]");
+    }
+
+    if ($debug) { # Dump parsed args to log file.
+        my $debug_line = "\tdebug: :${debug}: ";
+        $debug_line .= "debug_files: :${debug_files}: ";
+        $debug_line .= "debug_rsync: :${debug_rsync}:\n";
+        $debug_line .= "\tdry_run: :${dry_run}:\n";
+        $debug_line .= "\tforce: :${force}:\n";
+        $debug_line .= "\tlist: :${list}:\n";
+        $debug_line .= "\tverbose: :${verbose}:\n";
+        $debug_line .= "\tprogress: :${progress}:\n";
+        $debug_line .= "\tdist_stat: :${dist_stat}: ";
+        $debug_line .= "dist_stat_repo: :${dist_stat_repo}:\n";
+        $debug_line .= "\tconfig: :${config}: ";
+        $debug_line .= "\tconfig_mirror: :${config_mirror}:\n";
+        $debug_line .= "\tremove: :${remove}: ";
+        $debug_line .= "remove_repo: :${remove_repo}:";
+        $debug_line .= "skip_mirror: :${skip_mirror}:";
+        $debug_line .= "skip_zero: :${skip_zero}:";
+        $debug_line .= "show_times: :${show_times}:";
+        &log("DEBUG:\n${debug_line}");
+    }
+}
+
+sub reset_logfile {
+    my ($logfile) = @_;
+    if (not -f $logfile) { return; }
+    `tail -10000 ${logfile} > ${logfile}.out`;
+    rename("${logfile}.out", $logfile);
+}
+
+sub ymdhms_timestamp {
+    my($sec, $min, $hour, $mday, $mon, $yr, $wday, $yday, $isdst) = localtime;
+    $yr += 1900;
+    $mon++;
+    if ($mon < 10) { $mon = "0$mon"; }
+    if ($mday < 10) { $mday = "0$mday"; }
+    if ($hour < 10) { $hour = "0$hour"; }
+    if ($min < 10) { $min = "0$min"; }
+    if ($sec < 10) { $sec = "0$sec"; }
+    return("${yr}.${mon}.${mday}.${hour}.${min}.${sec}");
+}
+
+sub nicenum {
+    local($nicenum) = @_;
+    $nicenum =~ s/\s+//g;
+    if (!$nicenum) { return("0"); }
+    if ($nicenum < 1000) { return($nicenum); }
+    local($out) = "";
+    do {
+        $out = sprintf(",%s%s", substr($nicenum, -3, 3), $out);
+        substr($nicenum, -3) = '';
+    } while (length($nicenum) > 3);
+    $nicenum = "$nicenum$out";
+    return($nicenum);
+}
+
+sub kmg_size {
+    my ($size) = @_;
+    if ($size < 1024) { return("${size}B"); }
+    if ($size < (1024 * 1024)) {
+        my $kb = sprintf("%2.2f", ($size / 1024));
+        return("${kb}K");
+    }
+    if ($size < (1024 * 1024 * 1024)) {
+        my $mb = sprintf("%2.2f", ($size / (1024 * 1024)));
+        return("${mb}M");
+    }
+    my $gb = sprintf("%2.2f", ($size / (1024 * 1024 * 1024)));
+    return("${gb}G");
+}
+
+sub sec_to_dhms {
+    my ($secs) = @_;
+    my $day_sec = (60 * 60 * 24);
+    my $hour_sec = (60 * 60);
+    my $days = 0;
+    my $hours = 0;
+    my $mins = 0;
+    if ($secs > $day_sec) { $days = int($secs / $day_sec); $secs = ($secs % ($days * $day_sec)); }
+    if ($secs > $hour_sec) { $hours = int($secs / $hour_sec); $secs = ($secs % ($hours * $hour_sec)); }
+    if ($secs > 60) { $mins = int($secs / 60); $secs = ($secs % ($mins * 60)); }
+    my $result = "";
+    if ($days)  { $result .= "${days}d "; }
+    if ($hours) { $result .= "${hours}h "; }
+    if ($mins)  { $result .= "${mins}m "; }
+    if ($secs)   { $result .= "${secs}s "; }
+    return($result);
+}
+
+sub log {
+    my ($log_line) = @_;
+    my $date = &ymdhms_timestamp;
+    $log_line = "${date} ${log_line}";
+    open(LOGFILE, ">>${LOGFILE}");
+    print LOGFILE "${log_line}\n";
+    close(LOGFILE);
+}
+
+sub error {
+    my ($error_line) = @_;
+    my $date = &ymdhms_timestamp;
+    &log($error_line);
+    print STDOUT "${date} ${error_line}. Exiting.\n";
+    exit(1);
+}
+
+sub import_configs {
+    my ($RSYNC_CONFIG_DIR) = @_;
+    if (not -d $RSYNC_CONFIG_DIR) { # We should have created it.
+        &log("ERR: directory ${RSYNC_CONFIG_DIR} missing");
+        die "ERR: directory ${RSYNC_CONFIG_DIR} missing";
+    }
+    opendir(CONFIGS, $RSYNC_CONFIG_DIR) || die "Cant open ${RSYNC_CONFIG_DIR}:";
+    my @config_inodes = readdir(CONFIGS);
+    closedir(CONFIGS);
+    foreach my $config_inode (@config_inodes) {
+        chomp($config_inode);
+        next if ($config_inode =~ m/^\./);
+        next unless (-f "${RSYNC_CONFIG_DIR}/${config_inode}");
+        &import_cfg_file("${RSYNC_CONFIG_DIR}/${config_inode}");
+    }
+}
+
+sub import_cfg_file {
+    my ($cfg_file) = @_;
+    my $cfg_host = $cfg_file;
+    $cfg_host =~ s#.*/##g;
+    open(CONFIG, $cfg_file) || die "Cant open ${cfg_file}:";
+    if (not defined($REPOS{$cfg_host}{"host"})) {
+        $REPOS{$cfg_host}{"host"} = 1;
+    }
+    my $cfg_releases = "";
+    my $cfg_repos = "";
+    my $cfg_archs = "";
+    my $cfg_keep = $KEEP_DEFAULT;
+    while ($cfg_line = <CONFIG>) {
+        chomp($cfg_line);
+        next if ($cfg_line =~ m/^#/);
+        next unless (length($cfg_line));
+        if ($debug >= 2) { &log("DEBUG: ${cfg_host}: read ${cfg_line}"); }
+        if ($cfg_line =~ m/^STATUS\s+/) {
+            my $status = $cfg_line;
+            $status =~ s/^STATUS\s+//g;
+            if (length($status)) { # Usually OK and IGNORE
+                $REPOS{$cfg_host}{"status"} = $status;
+            } else {
+                &error("${cfg_file}: STATUS line malformed");
+            }
+        }
+        if ($cfg_line =~ m/^REMOTE_URL_COMPONENT\s+/) {
+            my $url_component = $cfg_line;
+            $url_component =~ s/.*\s+//g;
+            if (length($url_component)) {
+                $REPOS{$cfg_host}{"url_component"} = $url_component;
+            } else {
+                &error("${cfg_file}: REMOTE_URL_COMPONENT line malformed");
+            }
+        }
+        if ($cfg_line =~ m/^LOCAL_DIST_DIR\s+/) {
+            my $local_dist_dir = $cfg_line;
+            $local_dist_dir =~ s/.*\s+//g;
+            if (length($local_dist_dir)) {
+                $REPOS{$cfg_host}{"local_dist_dir"} = $local_dist_dir;
+            } else {
+                &error("${cfg_file}: LOCAL_DIST_DIR line malformed");
+            }
+        }
+        if ($cfg_line =~ m/^RELEASES\s+/) {
+            if (length($cfg_releases) && length($cfg_repos) && length($cfg_archs) && length($cfg_keep)) {
+                &store_release_config($cfg_host, $cfg_releases, $cfg_repos, $cfg_archs, $cfg_keep);
+                $cfg_repos = "";
+                $cfg_archs = "";
+                my $cfg_keep = $KEEP_DEFAULT;
+            }
+            $cfg_releases = $cfg_line;
+            $cfg_releases =~ s/RELEASES\s+//;
+        }
+        if ($cfg_line =~ m/^RELEASES_REPO\s+/) {
+            $cfg_repos = $cfg_line;
+            $cfg_repos =~ s/RELEASES_REPO\s+//;
+        }
+        if ($cfg_line =~ m/^RELEASES_ARCH\s+/) {
+            $cfg_archs = $cfg_line;
+            $cfg_archs =~ s/RELEASES_ARCH\s+//;
+        }
+        if ($cfg_line =~ m/^RELEASES_KEEP\s+/) {
+            $cfg_keep = $cfg_line;
+            $cfg_keep =~ s/RELEASES_KEEP\s+//;
+        }
+    }
+    if (length($cfg_releases) && length($cfg_repos) &&
+        length($cfg_archs) && length($cfg_keep)) {
+        &store_release_config($cfg_host, $cfg_releases, $cfg_repos, $cfg_archs, $cfg_keep);
+    } else {
+        &log("DEBUG: missing args cfg_host :${cfg_host}: cfg_releases :${cfg_releases}: \
+            cfg_repos :${cfg_repos}: cfg_archs :${cfg_archs}: cfg_keep :${cfg_keep}:");
+    }
+    if ($debug >= 4) { # Save repository config
+        open(LOGFILE, ">>${LOGFILE}");
+        print LOGFILE Dumper(\%REPOS);
+        close(LOGFILE);
+    }
+    if ($debug >= 5) { # Watching RAM usage
+        ### my $total_size = total_size(\%REPOS);
+        ### &log("DEBUG: REPOS ${cfg_host} uses ${total_size} bytes of RAM");
+    }
+}
+
+sub show_configs {
+    my ($purpose, $config_mirror) = @_;
+    foreach my $mirror (sort keys %REPOS) {
+        if ($purpose eq "list") {
+            if (length($mirror)) { print STDOUT "${mirror}\n"; }
+            next;
+        }
+        next if ((length($config_mirror)) && ($mirror ne $config_mirror));
+        print STDOUT "${mirror}\n";
+        my $mirror_status = $REPOS{$mirror}{'status'};
+        print STDOUT "  status ${mirror_status}\n";
+        my $mirror_remote_component = $REPOS{$mirror}{'url_component'};
+        print STDOUT "  remote location rsync://${mirror}/${mirror_remote_component}\n";
+        my $mirror_dist_dir = $REPOS{$mirror}{'local_dist_dir'};
+        print STDOUT "  local directory ${APT_MIRROR_DIR}/${mirror_dist_dir}\n";
+        my $max_length = 0;
+        foreach my $release (sort keys %{ $REPOS{$mirror}{'release'} }) {
+            foreach my $repo (sort keys %{ $REPOS{$mirror}{'release'}{$release}{'repo'} }) {
+                my $this_length = length("${release} ${repo}");
+                if ($this_length > $max_length) { $max_length = $this_length; }
+            }
+        }
+        foreach my $release (sort keys %{ $REPOS{$mirror}{'release'} }) {
+            foreach my $repo (sort keys %{ $REPOS{$mirror}{'release'}{$release}{'repo'} }) {
+                printf STDOUT "    %-${max_length}.${max_length}s", "${release} ${repo}";
+                foreach my $arch (sort keys %{ $REPOS{$mirror}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
+                    my $keep = $REPOS{$mirror}{'release'}{$release}{'repo'}{$repo}{'arch'}{$arch}{'keep'};
+                    print STDOUT "  ${arch} keep: ${keep}";
+                }
+                print STDOUT "\n";
+            }
+        }
+    }
+}
+
+sub dist_stat {
+    my ($dist_stat_repo) = @_;
+    my %STATS = ();
+    my %METASYNC = ();
+    my @releases = `/bin/find ${APT_MIRROR_DIR} -type f -name Release`;
+    &log("DEBUG: dist_stat_repo: :${dist_stat_repo}:");
+    my $release_count = 0;
+    foreach my $release (sort @releases) {
+        chomp($release);
+        next if ($release =~ m#/source#);
+        next if ($release =~ m#/binary\-#);
+        if (length($dist_stat_repo)) { next unless ($release =~ m#${dist_stat_repo}#); }
+        $release =~ s#/Release##;
+        $release_count++;
+        my @packages = `/bin/find ${release} -type f -name Packages`;
+        my $pretty_release = $release;
+        $pretty_release =~ s#${APT_MIRROR_DIR}/##;
+        $pretty_release =~ s#/Release##;
+        $pretty_release =~ s#/dists/# #;
+        my ($release_location, $pretty_release) = split(/ /, $pretty_release, 2);
+        $STATS{$release_location}{'dir'} = $release;
+        foreach my $pkg_file (sort @packages) {
+            chomp($pkg_file);
+            next if ($pkg_file =~ m#/source#);
+            my $repo = $pkg_file;
+            $repo =~ s#^${release}/##;
+            $repo =~ s#/binary\-.*##;
+            my $arch = $pkg_file;
+            $arch =~ s#.*/binary\-##;
+            $arch =~ s#/Packages##;
+            $STATS{$release_location}{'release'}{$pretty_release}{'repo'}{$repo}{'arch'}{$arch} = 1;
+        }
+    }
+    if (not $release_count) {
+        print STDOUT "No viable release mirrors were found. Have you finished syncing?\n";
+    }
+    my $max_release_host_length = 0;
+    my $max_release_length = 0;
+    my $max_repo_length = 0;
+    my $max_arch_length = 0;
+    my $max_need_length = 9;
+    my $max_size_length = 10;
+    foreach my $release_location (keys %STATS) {
+        if (length($release_location) > $max_release_host_length) { $max_release_host_length = length($release_location); }
+        foreach my $release (keys %{ $STATS{$release_location}{'release'} }) {
+            if (length($release) > $max_release_length) { $max_release_length = length($release); }
+            foreach my $repo (keys %{ $STATS{$release_location}{'release'}{$release}{'repo'} }) {
+                if (length($repo) > $max_repo_length) { $max_repo_length = length($repo); }
+                foreach my $arch (keys %{ $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
+                    if (length($arch) > $max_arch_length) { $max_arch_length = length($arch); }
+                }
+            }
+        }
+    }
+    my $total_width = ($max_release_length + $max_repo_length + $max_arch_length + $max_need_length + $max_size_length + 43);
+    &log("DEBUG: total_width: ${total_width}");
+    foreach my $release_location (sort keys %STATS) {
+        my $release_hostname = $release_location;
+        $release_hostname =~ s#/.*##;
+        &log("DEBUG: box: doing release_location: ${release_location}");
+        print STDOUT "+" . "-" x $total_width . "+\n";
+        print STDOUT "| ${release_location}"    . " " x ($total_width - length($release_location) -1) . "|\n";
+        print STDOUT "+" . "-" x $total_width . "+\n";
+        print STDOUT "|" . " Release"       . " " x ($max_release_length - 6);
+        print STDOUT "|" . " Repo"          . " " x ($max_repo_length - 3);
+        print STDOUT "|" . " Arch"          . " " x ($max_arch_length);
+        print STDOUT " |" . " Pkgs"         . " " x ($max_need_length - 4);
+        print STDOUT " |" . " Bytes"        . " " x ($max_size_length - 5);
+        print STDOUT " |" . " Need Pkgs"    . " " x ($max_need_length - 9);
+        print STDOUT " |" . " Need Bytes"   . " " x ($max_size_length - 10);
+        print STDOUT " " x ($total_width - $max_release_length - $max_repo_length - $max_arch_length - 61) . "|\n";
+        print STDOUT "+" . "-" x $total_width . "+\n";
+        foreach my $release (sort keys %{ $STATS{$release_location}{'release'} }) {
+            # To get the current missing pkgs and required bytes we need to go
+            # and fetch the current Packages files to our dist_temp and parse
+            # those. Somewhat complex. Takes a bit too long to be useful.
+            ### foreach my $mirror_host (keys %REPOS) {
+            ###     next if (defined($METASYNC{$mirror_host})); # Did this already
+            ###     my $mirror_status = $REPOS{$mirror_host}{'status'};
+            ###     if ($mirror_status eq "DOH") {
+            ###         if (defined($REPOS{$mirror_host}{'release'}{$release})) {
+            ###             &log("DEBUG: process_rsync_mirror_config_file($mirror_host, metasync);");
+            ###             &process_rsync_mirror_config_file($mirror_host, "metasync");
+            ###             $METASYNC{$mirror_host} = 1;
+            ###         }
+            ###     }
+            ### }
+            printf STDOUT "| %-${max_release_length}.${max_release_length}s ", $release;
+            $shown_release++;
+            foreach my $repo (sort keys %{ $STATS{$release_location}{'release'}{$release}{'repo'} }) {
+                if (not $shown_release) { printf STDOUT "| %-${max_release_length}.${max_release_length}s ", " "; }
+                $shown_release++;
+                printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", $repo;
+                $shown_repo++;
+                foreach my $arch (sort keys %{ $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
+                    if (not $shown_release) { printf STDOUT "| %-${max_release_length}.${max_release_length}s ", " "; }
+                    if (not $shown_repo) { printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", " "; }
+                    printf STDOUT "| %-${max_arch_length}.${max_arch_length}s ", $arch;
+                    print STDOUT "\n";
+                    $shown_release = 0;
+                    $shown_repo = 0;
+                }
+            }
+        }
+        print STDOUT "+" . "-" x $total_width . "+\n";
+        print STDOUT "\n";
+    }
+}
+
+sub store_release_config {
+    my ($host, $releases, $repos, $archs, $keep) = @_;
+    if ($debug) { &log("DEBUG: store_release_config ${host} ${releases} ${repos} ${archs} ${keep}"); }
+    foreach my $release (split(/ /, $releases)) {
+        foreach my $repo (split(/ /, $repos)) {
+            foreach my $arch (split(/ /, $archs)) {
+                if ($debug >= 3) { &log("DEBUG: store_release_config() saving ${host} ${release} ${repo} ${arch} ${keep}"); }
+                $REPOS{$host}{"release"}{$release}{"repo"}{$repo}{"arch"}{$arch}{"keep"} = $keep;
+            }
+        }
+    }
+}
+
+# Mirroring concepts:
+#
+# For each remote rsync mirror host config, copy the LOCAL_DIST_DIR
+# tree to a work directory so we can fetch the latest package information,
+# but not also pollute the data currently used by all the local client
+# machines. Once we have rsync the latest packages then the new dist
+# files are valid to be given to clients.
+#
+# e.g.
+#      Copy /mirror/archive.ubuntu.com/ubuntu/dists to /var/tmp/temp_dist
+#      Then rsync the new remote dists files to /var/tmp/temp_dist and
+#      use those new package files to update binaries in the pkg pool.
+#      Then copy the new /var/tmp/temp_dist back to the repo metadata
+#      directory. This is a standard and safe three stage update process.
+#
+# This program does this in a release and repo granularity. So your
+# jammy/main repo will be updated for both amd64 and i386 and then
+# the new debs and Packages files are made available to the APT clients.
+# Then the program will move on to jammy/multiverse etc.
+#
+# With rsync you don't need to have a monolithic batch of files to fetch,
+# we can sync up, and release for use, individual repos one at a time.
+# In fact we need to do this to have the fine grained control.
+#
+# For action we have "normal" and "metasync". The latter is called by
+# the dist_stat() routine to get current Packages files for calculating
+# what's missing etc.
+
+sub process_rsync_mirror_config_file {
+    my ($remote_host, $action) = @_;
+    my $rsync_cmd = "";
+    my $dist_copy = 1;
+    my $total_fetched_mirror = 0;
+    my $normal = 0;
+    my $greenfields = 0;
+    my $metasync = 0;
+    if ($action eq "normal") { $normal++; }
+    if ($action eq "metasync") { $metasync++; }
+    my $status = $REPOS{$remote_host}{"status"};
+    if ($status !~ m/^OK$/i) {
+        if ($debug or $progress) { &log("DEBUG: Ignoring STATUS-non-OK ${remote_host}"); }
+        my $time_now = "";
+        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+        if ($progress or $dry_run) { print STDOUT "${time_now}Ignoring STATUS-non-OK ${remote_host}\n"; }
+        return;
+    } else {
+        if ($normal) {
+            if ($debug or $progress) { &log("DEBUG: process_rsync_mirror_config_file() Syncing ${remote_host}"); }
+            my $time_now = "";
+            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+            if ($progress or $dry_run) { print STDOUT "${time_now}Syncing ${remote_host}\n"; }
+        }
+    }
+
+    # archive.ubuntu.com/ubuntu
+    my $repo_dist_dir = $REPOS{$remote_host}{"local_dist_dir"};
+    my $test_host = $repo_dist_dir; $test_host =~ s#/.*##g;
+
+    # Don't copy local dists for hosts which store the repo binaries in there
+    if (defined($SPECIAL_DIST_COPY{$test_host})) {
+        if ($debug or $progress) { &log("DEBUG: Skipping dists copy for unsuitable ${repo_dist_dir}"); }
+        my $time_now = "";
+        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+        if ($normal && ($progress or $dry_run)) {
+            print STDOUT "${time_now}Skipping dists copy for unsuitable ${repo_dist_dir}\n";
+        }
+        $special_dist_copy++;
+    }
+
+    # Copy live dists into work dir, should be the same if we already did it
+    # before, otherwise we require the data to begin a remote mirror. If it
+    # doesn't exist yet then we will also start creating the repo locally.
+    if (not -d "${APT_MIRROR_DIR}/${repo_dist_dir}/dists") {
+        if ($debug) { &log("DEBUG: mkdir -p ${APT_MIRROR_DIR}/${repo_dist_dir}/dists"); }
+        my $time_now = "";
+        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+        if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${APT_MIRROR_DIR}/${repo_dist_dir}/dists\n"; }
+        if (not $dry_run) { `mkdir -p ${APT_MIRROR_DIR}/${repo_dist_dir}/dists/`; }
+        $greenfields++;
+    }
+    if (not -d "${DIST_WORK_DIR}/${repo_dist_dir}/dists") {
+        if ($debug) { &log("DEBUG: mkdir -p ${DIST_WORK_DIR}/${repo_dist_dir}/dists"); }
+        my $time_now = "";
+        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+        if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${DIST_WORK_DIR}/${repo_dist_dir}/dists\n"; }
+        if (not $dry_run) { `mkdir -p ${DIST_WORK_DIR}/${repo_dist_dir}/dists/`; }
+    }
+
+    # If we used --dry-run and it was the first invocation the DIST_WORK_DIR
+    # will be empty here so not much else will happen. If however there are
+    # some files there from a proper run then we'll do as much as we can.
+
+    # resolute resolute-updates resolute-backports resolute-security
+    my $releases = join(' ', sort keys %{ $REPOS{$remote_host}{"release"} });
+    if ($debug) { &log("DEBUG: ${remote_host} releases ${releases}"); }
+    foreach my $release (split(/ /, $releases)) {
+        my $total_fetched_release = 0;
+        chomp($release);
+        next unless (length($releases));
+        # if ($debug >= 2) { &log("DEBUG: process_rsync_mirror_config_file() working on ${remote_host} release ${release}"); }
+
+        # /data/dist_temp/archive.ubuntu.com/ubuntu/dists/jammy
+        my $release_work_dir = "${DIST_WORK_DIR}/${repo_dist_dir}/dists/${release}";
+        if (not -d $release_work_dir) {
+            if ($debug) { &log("DEBUG: mkdir -p ${release_work_dir}"); }
+            my $time_now = "";
+            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+            if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${release_work_dir}\n"; }
+            if (not $dry_run) { `mkdir -p ${release_work_dir}`; }
+        }
+
+        # main restricted universe multiverse
+        my $repos = join(' ', sort keys %{ $REPOS{$remote_host}{"release"}{$release}{"repo"} });
+        foreach my $repo (split(/ /, $repos)) {
+            chomp($repo);
+            next unless (length($repo));
+            # if ($debug >= 2) { &log("DEBUG: working on ${remote_host} release ${release} repo ${repo}"); }
+            my $repo_work_dir = "${release_work_dir}/${repo}";
+            my $repo_prod_dir = "${APT_MIRROR_DIR}/${repo_dist_dir}/dists/${release}/${repo}";
+            my $archs = join(' ', sort keys %{ $REPOS{$remote_host}{"release"}{$release}{"repo"}{$repo}{"arch"} });
+
+            if (not -d $repo_prod_dir) { # Happens on greenfields
+                if ($debug) { &log("DEBUG: mkdir -p ${repo_prod_dir}"); }
+                my $time_now = "";
+                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${repo_prod_dir}\n"; }
+                if (not $dry_run) { `mkdir -p ${repo_prod_dir}`; }
+                $greenfields++;
+            }
+
+            if (not -d $repo_work_dir) {
+                if ($debug) { &log("DEBUG: mkdir -p ${repo_work_dir}"); }
+                my $time_now = "";
+                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${repo_work_dir}\n"; }
+                if (not $dry_run) { `mkdir -p ${repo_work_dir}`; }
+            }
+
+            # By excluding *.deb we can safely cache dists files for the
+            # weird mirrors. This cmd also syncs the binary-{arch} files
+            # for archs we won't be caching.
+
+            ################################################################
+            #
+            # Transfer the current local mirror dists files to the work dir.
+            # This syncs over all archs that are on the local disk. Doing this
+            # here as it would scrub other (updated) archs in the loop below.
+            #
+            ################################################################
+            $rsync_cmd = "rsync --archive --recursive --exclude '*.deb' --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${repo_prod_dir}/ ${repo_work_dir}/.";
+            if ($dry_run) {
+                my $time_now = "";
+                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
+                &log("DEBUG: file sync: ${rsync_cmd}");
+            } else {
+                my @local_flist = `${rsync_cmd}`;
+                my $fcnt = scalar @local_flist;
+                if ($debug) { &log("DEBUG: ${fcnt} new files/dirs from current ${repo_dist_dir}/dists/${release}"); }
+                if ($debug >= 3) {
+                    foreach my $flist_line (@local_flist) {
+                        chomp($flist_line);
+                        &log("DEBUG:     ${flist_line}");
+                    }
+                }
+                # Full location is 'to ${release_work_dir}/${repo}'
+                if ($progress) {
+                    if ($normal && (not $skip_zero)) {
+                        my $time_now = "";
+                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                        print STDOUT "${time_now}Local sync ${repo_dist_dir}/dists/${release}/${repo} to ${DIST_WORK_DIR}/...\n";
+                    }
+                }
+            }
+            # i386 amd64
+            my $repo_fcnt = 0;
+            my $bad_exit = 0;
+            my $signal_seen = 0;
+            foreach my $arch (split(/ /, $archs)) {
+                chomp($arch);
+                next unless (length($arch));
+                # if ($debug >= 2) { &log("DEBUG: working on ${remote_host} release ${release} repo ${repo} arch ${arch}"); }
+                my $arch_work_dir = "${repo_work_dir}/binary-${arch}";
+                my $arch_prod_dir = "${repo_prod_dir}/binary-${arch}";
+                my $packages_file = "${arch_work_dir}/Packages";
+                if (not -d $arch_work_dir) { # Happens on greenfields
+                    if ($debug) { &log("DEBUG: mkdir -p ${arch_work_dir}"); }
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${arch_work_dir}\n"; }
+                    if (not $dry_run) { `mkdir -p ${arch_work_dir}`; }
+                }
+                if (not -d $arch_prod_dir) { # Happens on greenfields
+                    if ($debug) { &log("DEBUG: mkdir -p ${arch_prod_dir}"); }
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${arch_prod_dir}\n"; }
+                    if (not $dry_run) { `mkdir -p ${arch_prod_dir}`; }
+                    $greenfields++;
+                }
+                if (! -f $packages_file) {
+                    if (-f "${packages_file}.gz") {
+                        if ($dry_run) {
+                            my $time_now = "";
+                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                            if ($normal) { print STDOUT "${time_now}gunzip -c ${packages_file}.gz > ${packages_file}\n"; }
+                            &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}");
+                        } else {
+                            `gunzip -c ${packages_file}.gz > ${packages_file}`;
+                            if ($debug) { &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}"); }
+                        }
+                    } else {
+                        if (-f "${packages_file}.xz") {
+                            if ($dry_run) {
+                                my $time_now = "";
+                                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                                if ($normal) { print STDOUT "${time_now}xzcat -c ${packages_file}.gz > ${packages_file}\n"; }
+                                &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}");
+                            } else {
+                                `xzcat -c ${packages_file}.xz > ${packages_file}`;
+                                if ($debug) { &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}"); }
+                            }
+                        }
+                    }
+                }
+                ############################################################
+                #
+                # Update (or initially fetch) the release-repo-arch files from the upstream mirror
+                #
+                ############################################################
+                my $url_component = $REPOS{$remote_host}{"url_component"};
+                $rsync_cmd = "rsync --no-motd --open-noatime --archive --recursive --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 rsync://${remote_host}/${url_component}/dists/${release}/${repo}/binary-${arch}/ ${arch_work_dir}/";
+                if ($dry_run) {
+                    $rsync_cmd =~ s/atime/atime --dry-run/;
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    if ($normal) { print STDOUT "${time_now}Packages sync: ${rsync_cmd}\n"; }
+                }
+                if ($debug) {
+                    &log("DEBUG: Packages sync: ${rsync_cmd}");
+                }
+                my @pkgs_flist = `${rsync_cmd}`;
+                my $fcnt = scalar @pkgs_flist;
+                $repo_fcnt += $fcnt;
+                if ($debug) { &log("DEBUG: ${fcnt} new files/dirs from remote in ${release}/${repo}/binary-${arch}"); }
+                my $have_uncompressed = 0;
+                foreach my $flist_line (@pkgs_flist) {
+                    chomp($flist_line);
+                    if ($debug >= 3) { &log("DEBUG:     ${flist_line}"); }
+                    if ($flist_line eq "Packages.gz") { # We fetched some updates to merge
+                        if ($dry_run) {
+                            my $time_now = "";
+                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                            if ($normal) { print STDOUT "${time_now}gunzip -c ${packages_file}.gz > ${packages_file}\n"; }
+                            &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}");
+                            $have_uncompressed++;
+                        } else {
+                            `gunzip -c ${packages_file}.gz > ${packages_file}`;
+                            if ($debug) { &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}"); }
+                            $have_uncompressed++;
+                        }
+                    } else {
+                        if (($flist_line eq "Packages.xz") && (not $have_uncompressed)) {
+                            if ($dry_run) {
+                                my $time_now = "";
+                                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                                if ($normal) { print STDOUT "${time_now}xzcat -c ${packages_file}.gz > ${packages_file}\n"; }
+                                &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}");
+                            } else {
+                                `xzcat -c ${packages_file}.xz > ${packages_file}`;
+                                if ($debug) { &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}"); }
+                            }
+                        }
+                    }
+                }
+                if ($metasync) { next; } # Fetch more Packages files
+                my $update_msg = "";
+                if ($progress) {
+                    if ($fcnt) {
+                        my $time_now = "";
+                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                        $update_msg = "${time_now}Fetched new ${release}/${repo}/binary-${arch} Packages.\n";
+                        if ($normal) { print STDOUT $update_msg; }
+                        $update_msg = "";
+                    }
+                }
+                ############################################################
+                #
+                # Injest the Packages files for doing the fancy stuff
+                #
+                ############################################################
+                if ($debug) {
+                    &log("DEBUG: Parsing: ${packages_file}");
+                }
+                open(PACKAGES, $packages_file);
+                my $pkg = "";
+                my $file = "";
+                my $size = "";
+                my $uniq = "${repo_dist_dir}/${release}/${repo}/binary-${arch}";
+                my $pkg_cnt = 0;
+                my $have_bytes = 0;
+                my $need_bytes = 0;
+                my %NEED = ();
+                my %PKGFILES = ();
+                while ($pkg_line = <PACKAGES>) {
+                    chomp($pkg_line);
+                    if (not length($pkg_line)) {
+                        if (length($pkg) && length($file) && length($size)) {
+                            my $have = "no";
+                            # If you have your mirror on an SSD, turn off atime on the
+                            # mount point so that reading doesn't cause writes as that
+                            # causes excess wear on the drive for no good reason. Your
+                            # spinning rust drives will be faster too.
+                            my $test_size = -s "${APT_MIRROR_DIR}/${repo_dist_dir}/${file}";
+                            if ($test_size eq $size) { $have = "yes"; }
+                            if ($debug >= 6) { # Super noisy
+                                &log("DEBUG: caching :${pkg}: have :${have}: size :${size}: file :${file}:");
+                                # &log("DEBUG: caching ${uniq} :${pkg}: have :${have}: size :${size}: file :${file}:");
+                            }
+                            $PKGFILES{$uniq}{"pkg"}{$pkg}{"file"} = $file;
+                            $PKGFILES{$uniq}{"pkg"}{$pkg}{"have"} = $have;
+                            $PKGFILES{$uniq}{"pkg"}{$pkg}{"size"} = $size;
+                            if ($have eq 'no') {
+                                $need_bytes += $size;
+                                $NEED{$file} = $uniq;
+                            } else {
+                                $have_bytes += $size;
+                            }
+                        }
+                        $pkg = "";
+                        $file = "";
+                        $size = "";
+                    }
+                    if ($pkg_line =~ /^Package:\s+/) {
+                        $pkg = $pkg_line; $pkg =~ s/^Package:\s+//;
+                        $pkg_cnt++;
+                    }
+                    if ($pkg_line =~ /^Size:\s+/) {
+                        $size = $pkg_line; $size =~ s/^Size:\s+//;
+                    }
+                    if ($pkg_line =~ /^Filename:\s+/) {
+                        $file = $pkg_line; $file =~ s/^Filename:\s+//;
+                    }
+                }
+                if ($debug >= 5) { # Watching RAM usage
+                    # Storing four Ubuntu OS repo files and info uses 400MB of RAM.
+                    # Activating this profiling is a 5x slowdown in execution.
+                    ### my $total_size = nicenum(total_size(\%PKGFILES));
+                    ### &log("DEBUG: PKGFILES at ${total_size} bytes of RAM with ${pkg_cnt} new pkgs");
+                }
+                if ($progress) {
+                    my $missing = scalar keys %NEED;
+                    my $have_bytes_pretty = &kmg_size($have_bytes);
+                    my $need_bytes_pretty = &kmg_size($need_bytes);
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    $update_msg = "${time_now}${pkg_cnt} ${arch} pkgs using ${have_bytes_pretty}";
+                    if ($missing) {
+                        $update_msg .= ". Need ${missing} pkgs. Downloading ${need_bytes_pretty}B";
+                    }
+                    &log("INFO: Fetching ${uniq}");
+                    &log("INFO: ${update_msg}");
+                    $update_msg .= ".\n";
+                    if ($normal) { print STDOUT $update_msg unless ((not $missing) && $skip_zero); }
+                }
+                ############################################################
+                #
+                # Mirror the binaries
+                #
+                ############################################################
+                if ((scalar keys %NEED) && $normal) {
+                    my $need_list = "${DIST_WORK_DIR}/work_files/${release}_${repo}_binary_${arch}.need";
+                    open(NEED, ">${need_list}");
+                    foreach my $need_file (sort keys %NEED) {
+                        print NEED "${need_file}\n";
+                        if ($debug >= 6) {
+                            &log("DEBUG: Need rsync://${remote_host}/${url_component}/${need_file} for ${APT_MIRROR_DIR}/${repo_dist_dir}/");
+                        }
+                    }
+                    close(NEED);
+                    # Using 'links' options here will not make the server happy. '--archive' implies it.
+                    # Three -h needed for units in 1024. #purist
+                    $rsync_cmd = "rsync --files-from=${need_list} --no-motd --open-noatime --times --archive --recursive --chown=${FILE_OWNERSHIP} -h -h -h rsync://${remote_host}/${url_component} ${APT_MIRROR_DIR}/${repo_dist_dir}/";
+                    if ($progress) {
+                        $rsync_cmd =~ s/atime/atime --info=progress2/;
+                    }
+                    if ($dry_run) {
+                        $rsync_cmd =~ s/atime/atime --dry-run/;
+                        my $time_now = "";
+                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                        print STDOUT "${time_now}Binaries fetch: ${rsync_cmd}\n";
+                    }
+                    if ($debug) { &log("DEBUG: Binaries fetch: ${rsync_cmd}"); }
+                    # We run it normally here as the --info=progress2 needs to output
+                    system("${rsync_cmd}");
+                    my $exit_code = $?;
+                    if ($exit_code & 127) { $signal_seen++; }
+                    if ($exit_code >> 8) { $bad_exit++; }
+                }
+                if ((not $bad_exit) && (not $signal_seen)) {
+                    $total_fetched_release += $need_bytes;
+                }
+                ############################################################
+                #
+                # Handle any symlinked binaries
+                #
+                # If we just fetched deb files which are symlinks, we need to
+                # do another fetch and get the real debs to make the archive
+                # consistent. Only fetch if they are missing.
+                #
+                ############################################################
+                my %SYMLINKS = ();
+                foreach my $need_file (sort keys %NEED) {
+                    if (-l "${APT_MIRROR_DIR}/${repo_dist_dir}/${need_file}") { $SYMLINKS{$need_file} = 1; }
+                }
+                %NEED = ();
+                $need_bytes = 0;
+                if (scalar keys %SYMLINKS) {
+                    my $symlink_list = "${DIST_WORK_DIR}/work_files/${release}_${repo}_binary_${arch}.symlinks";
+                    open(SYMLINKS, ">${symlink_list}");
+                    foreach my $symlink (sort keys %SYMLINKS) {
+                        my $real_path = `readlink -m ${APT_MIRROR_DIR}/${repo_dist_dir}/${symlink}`;
+                        if ($debug >= 6) {
+                            &log("DEBUG: symlink ${symlink} points to ${real_path}");
+                        }
+                        chomp($real_path);
+                        next if (-f $real_path); # Already did it
+                        ### $real_path =~ s#${APT_MIRROR_DIR}/${repo_dist_dir}/##;
+                        $real_path =~ s#.*/pool/#pool/#;
+                        print SYMLINKS "${real_path}\n";
+                        $NEED{$real_path} = 1;
+                        if ($debug >= 6) {
+                            &log("DEBUG: Need symlinked rsync://${remote_host}/${url_component}/${real_path} for ${APT_MIRROR_DIR}/${repo_dist_dir}/");
+                        }
+                    }
+                    close(SYMLINKS);
+                    $rsync_cmd = "rsync --files-from=${symlink_list} --no-motd --open-noatime --times --archive --recursive --chown=${FILE_OWNERSHIP} -h -h -h rsync://${remote_host}/${url_component} ${APT_MIRROR_DIR}/${repo_dist_dir}/";
+                    if ($progress) {
+                        $rsync_cmd =~ s/atime/atime --info=progress2/;
+                    }
+                    if (scalar keys %NEED) {
+                        if ($dry_run) {
+                            $rsync_cmd =~ s/atime/atime --dry-run/;
+                            my $time_now = "";
+                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                            print STDOUT "${time_now}Binaries fetch: ${rsync_cmd}\n";
+                        }
+                        if ($debug) { &log("DEBUG: Binaries fetch: ${rsync_cmd}"); }
+                        # We run it normally here as the --info=progress2 needs to output
+                        system("${rsync_cmd}");
+                        my $exit_code = $?;
+                        if ($exit_code & 127) { $signal_seen++; }
+                        if ($exit_code >> 8) { $bad_exit++; }
+                        # Tally how much more we just fetched
+                        foreach my $needed_file (keys %NEED) {
+                            my $test_size = -s "${APT_MIRROR_DIR}/${repo_dist_dir}/${needed_file}";
+                            if ($test_size) { $need_bytes += $test_size; }
+                        }
+                    }
+                }
+                if ((not $bad_exit) && (not $signal_seen)) {
+                    $total_fetched_release += $need_bytes;
+                }
+            } # arch
+            ################################################################
+            #
+            # Save updated meta files from the mirror for this repo. Doing it
+            # this fine grained so as to retain effort done and not overload
+            # the mirror hosts. Each repo in the release is whole, though some
+            # might claim all release repos have to be whole before shared to
+            # APT clients. 
+            #
+            ################################################################
+            if ($signal_seen || $bad_exit) {
+                my $time_now = "";
+                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                print STDOUT "${time_now}Abnormal exit. Not updating mirror with metadata.\n";
+                if ($debug) { &log("DEBUG: Abnormal exit. Not updating metadata for ${release}/${repo}"); }
+            } else {
+                if ($repo_fcnt) {
+                    # Copy back the new Packages etc files from the work dir to the local mirror.
+                    $rsync_cmd = "rsync --archive --recursive --exclude '*.deb' --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${release_work_dir}/${repo}/ ${APT_MIRROR_DIR}/${repo_dist_dir}/dists/${release}/${repo}/.";
+                    if ($dry_run) {
+                        my $time_now = "";
+                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                        print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
+                        &log("DEBUG: file sync: ${rsync_cmd}");
+                    } else {
+                        my @local_flist = `${rsync_cmd}`;
+                        my $fcnt = scalar @local_flist;
+                        if ($debug) { &log("DEBUG: ${fcnt} new files/dirs updated in ${APT_MIRROR_DIR}/${repo_dist_dir}/dists/${release}/${repo}"); }
+                        if ($debug >= 3) {
+                            foreach my $flist_line (@local_flist) {
+                                chomp($flist_line);
+                                &log("DEBUG:     ${flist_line}");
+                            }
+                        }
+                        if ($progress) {
+                            # if (not $skip_zero) {
+                                my $time_now = "";
+                                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                                print STDOUT "${time_now}Mirror synced ${repo_dist_dir} ${release} ${repo}\n";
+                                if ($debug) { &log("DEBUG: Updated mirror wth ${release_work_dir}/${repo}"); }
+                            # }
+                        }
+                    }
+                } # repo_fcnt
+            } # exit check
+        } # repo
+        $total_fetched_mirror += $total_fetched_release;
+        if ($total_fetched_release && $normal) {
+            if ($progress) {
+                my $total_fetched_release_pretty = &kmg_size($total_fetched_release);
+                my $time_now = "";
+                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                print STDOUT "${time_now}Fetched ${total_fetched_release_pretty} for ${release}.\n";
+                if ($debug) { &log("DEBUG: Fetched ${total_fetched_release_pretty} for ${release}"); }
+            }
+        }
+    } # release
+    if ($total_fetched_mirror && $normal) {
+        if ($progress) {
+            my $total_fetched_mirror_pretty = &kmg_size($total_fetched_mirror);
+            my $time_now = "";
+            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+            print STDOUT "${time_now}Fetched ${total_fetched_mirror_pretty} from ${remote_host}.\n";
+            if ($debug) { &log("DEBUG: Fetched ${total_fetched_mirror_pretty} from ${remote_host}"); }
+        }
+    }
+    if ($debug >= 6) { # Save repository config
+        open(LOGFILE, ">>${LOGFILE}");
+        print LOGFILE Dumper(\%REPOS);
+        close(LOGFILE);
+    }
+}

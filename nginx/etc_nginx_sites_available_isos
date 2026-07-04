@@ -1,0 +1,21 @@
+server {
+    listen 80;
+    server_name mirror-isos.example.com 10.1.1.4;
+
+    root /mirror/isos;
+
+    location / {
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+        expires -1;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Enable gzip for text files
+    gzip on;
+    gzip_types text/plain application/x-gzip;
+
+    access_log /var/log/nginx/isos-access.log;
+    error_log /var/log/nginx/isos-error.log;
+}
