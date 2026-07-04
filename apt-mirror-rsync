@@ -505,7 +505,10 @@ sub dist_stat {
     my $max_repo_length = 0;
     my $max_arch_length = 0;
     my $max_need_length = 9;
-    my $max_size_length = 10;
+    my $pkgs_width = 6;
+    my $bytes_width = 8;
+    my $deduct = 15;
+    my $width_adjustment = 6;
     foreach my $release_location (keys %STATS) {
         if (length($release_location) > $max_release_host_length) { $max_release_host_length = length($release_location); }
         foreach my $release (keys %{ $STATS{$release_location}{'release'} }) {
@@ -518,7 +521,7 @@ sub dist_stat {
             }
         }
     }
-    my $total_width = ($max_release_length + $max_repo_length + $max_arch_length + $max_need_length + $max_size_length + 43);
+    my $total_width = ($max_release_length + $max_repo_length + $max_arch_length + $max_need_length + $pkgs_width + $bytes_width + $width_adjustment);
     &log("DEBUG: total_width: ${total_width}");
     foreach my $release_location (sort keys %STATS) {
         my $release_hostname = $release_location;
@@ -529,12 +532,12 @@ sub dist_stat {
         print STDOUT "+" . "-" x $total_width . "+\n";
         print STDOUT "|" . " Release"       . " " x ($max_release_length - 6);
         print STDOUT "|" . " Repo"          . " " x ($max_repo_length - 3);
-        print STDOUT "|" . " Arch"          . " " x ($max_arch_length);
-        print STDOUT " |" . " Pkgs"         . " " x ($max_need_length - 4);
-        print STDOUT " |" . " Bytes"        . " " x ($max_size_length - 5);
-        print STDOUT " |" . " Need Pkgs"    . " " x ($max_need_length - 9);
-        print STDOUT " |" . " Need Bytes"   . " " x ($max_size_length - 10);
-        print STDOUT " " x ($total_width - $max_release_length - $max_repo_length - $max_arch_length - 61) . "|\n";
+        print STDOUT "|" . " Arch"          . " " x ($max_arch_length - 3);
+        print STDOUT " |" . " Pkgs"         . " " x ($pkgs_width - 4);
+        print STDOUT " |" . " Bytes"        . " " x ($bytes_width - 4);
+        #print STDOUT " |" . " Need Pkgs"    . " " x ($max_need_length - 9);
+        #print STDOUT " |" . " Need Bytes"   . " " x ($max_size_length - 10);
+        print STDOUT " " x ($total_width - ($max_release_length + $max_repo_length + $max_arch_length + $pkgs_width + $bytes_width + $deduct)) . "|\n";
         print STDOUT "+" . "-" x $total_width . "+\n";
         foreach my $release (sort keys %{ $STATS{$release_location}{'release'} }) {
             # To get the current missing pkgs and required bytes we need to go
@@ -559,10 +562,31 @@ sub dist_stat {
                 printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", $repo;
                 $shown_repo++;
                 foreach my $arch (sort keys %{ $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
+                    my $arch_total_files = 0;
+                    my $arch_total_size = 0;
                     if (not $shown_release) { printf STDOUT "| %-${max_release_length}.${max_release_length}s ", " "; }
                     if (not $shown_repo) { printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", " "; }
                     printf STDOUT "| %-${max_arch_length}.${max_arch_length}s ", $arch;
-                    print STDOUT "\n";
+                    my $packages_file = "${APT_MIRROR_DIR}/${release_location}/dists/${release}/${repo}/binary-${arch}/Packages";
+                    if (not -f $packages_file) { print STDOUT "missing ${packages_file}\n"; }
+                    open(PACKAGES, $packages_file);
+                    while ($pkg_line = <PACKAGES>) {
+                        chomp($pkg_line);
+                        if ($pkg_line =~ /^Filename:\s+/) {
+                            my $file = $pkg_line; $file =~ s/^Filename:\s+//;
+                            my $size = -s "${APT_MIRROR_DIR}/${release_location}/${file}";
+                            if ($debug) { &log("DEBUG: dist_stat: file: ${APT_MIRROR_DIR}/${release_location}/${file}"); }
+                            $arch_total_files++;
+                            $arch_total_size += $size;
+                        }
+                    }
+                    close(PACKAGES);
+                    my $arch_total_files_pretty = &nicenum($arch_total_files);
+                    my $arch_total_size_pretty = &kmg_size($arch_total_size);
+                    printf STDOUT " | %${pkgs_width}.${pkgs_width}s", $arch_total_files_pretty;
+                    print STDOUT " " x ($pkgs_width - 6);
+                    printf STDOUT " | %${bytes_width}.${bytes_width}s", $arch_total_size_pretty;
+                    print STDOUT " |\n";
                     $shown_release = 0;
                     $shown_repo = 0;
                 }
