@@ -7,7 +7,7 @@ This script implements mirroring of remote APT mirrors via rsync. It's written e
 TL;DR
 -----
 
-If you want to get going quickly, these steps will install the script, the conf file and a mirror file. You must tune those mirror configurations before starting. Then you sanity check the mirror configs and start mirroring. See the Installation section below for more details.<BR>
+If you want to get going quickly, these steps will install the script, the script conf file and a mirror site definition file. You must tune those mirror configurations before starting. Then you sanity check the mirror configs and start mirroring. See the Installation section below for more details.<BR>
 
 You will want to observe the progress the first time via <CODE>--progress</CODE>, and usually want to only see things that change on the system so use <CODE>--ignore-zero</CODE> (aka <CODE>-p -z</CODE>). Afterwards view how much data is being used by all the repos in your mirror tree.<BR>
 
@@ -61,11 +61,11 @@ There are over a dozen examples in the config/ directory with a variety of <CODE
 
 The mirror config file contains a full description of each field, and in the case of the example <CODE>mirror.aarnet.net.au</CODE> file it's set to mirror all of the focal, jammy, noble and resolute Ubuntu releases. You likely don't want to have all of those OS releases so comment out the ones you don't want. FYI they take nearly 3TB to mirror all of them.<BR>
 
-The <CODE>STATUS</CODE> field lets you leave a file in-place in the <CODE>sources.rsync.d</CODE> directory and if the value isn't set to <CODE>OK</CODE> then the file contents will be ignored. It's simpler than having to move the file out of the directory like you need to do with the normal APT repo source files when you don't want them parsed.<BR>
+Inside the file the <CODE>STATUS</CODE> field lets you leave a mirror definition file in-place in the <CODE>sources.rsync.d</CODE> directory and if the value isn't set to <CODE>OK</CODE> then the file contents will be ignored. It's simpler than having to move the file out of the directory like you need to do with the normal APT repo source files when you don't want them parsed.<BR>
 
-A lot of the mirrors on the <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A> list will have their files in a different path on the mirror site than where Canonical does. You can use the <CODE>REMOTE_URL_COMPONENT</CODE> and the <CODE>LOCAL_DIST_DIR</CODE> to create the mapping you want. Keeping the destination for your local files the same as what a normal <CODE>apt-get</CODE> would want (i.e. <CODE>archive.ubuntu.com/ubuntu</CODE> makes it simpler for all of your local clients.
+A lot of the remote mirrors on the <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A> list will keep their files in a different path on the mirror site than where Canonical does. You can use the <CODE>REMOTE_URL_COMPONENT</CODE> and the <CODE>LOCAL_DIST_DIR</CODE> to create the mapping you want, fixing the problem. Keeping the destination for your local files the same as what a normal <CODE>apt-get</CODE> would want (i.e. <CODE>archive.ubuntu.com/ubuntu</CODE> makes it simpler for all of your local clients.
 
-Once you have tuned your mirror config file verify that your settings are sane and what you intended.  You can list your configured mirror names with <CODE>apt-mirror-rsync --list-mirrors</CODE>. If that's working then you can list the contents of the mirrors with <CODE>apt-mirror-rsync --config</CODE>. That will show you what the program will attempt to mirror down to your local disk.<BR>
+Once you have tuned your mirror config file you should verify that your settings are sane and what you intended.  You can list your configured mirror names with <CODE>apt-mirror-rsync --list-mirrors</CODE>. If that's working then you can list the contents of the mirrors with <CODE>apt-mirror-rsync --config</CODE>. That will show you what the program will attempt to mirror down to your local disk.<BR>
 
     host:/root root# apt-mirror-rsync -l
     mirror.aarnet.edu.au
@@ -98,14 +98,14 @@ The full list of available command options are shown with <CODE>-h</CODE> or <CO
            --dry-run            : print out what would occur
       -f | --force              : force destructive action
       -l | --list-mirrors       : list configured mirrors
-      -p | --progress           : show progress
+      -p | --progress           : show syncing progress
       -r | --dist-remove <repo> : remove files for a repo
       -s | --dist-stat [<repo>] : show one/all repo stats
       -t | --times              : show date and time stamps
       -v | --verbose            : display more information
       -z | --ignore-zero        : only show when binaries update
 
-If all the setup steps above are done, your disk is ready and the remote mirrors are responding then you can start mirroring. With my preferred interactive args of <CODE>-p -z</CODE> it will show the host you are fetching from, each new Packages file fetched for every binary release you are copying, and then the rsync transfer output is shown:<BR>
+If all the setup steps described above are done, your storage disk is ready and the remote mirrors are responding then you can start mirroring. With my preferred interactive args of <CODE>-p -z</CODE> it will show the host you are fetching from, each new Packages file fetched for every binary release you are copying, and then the rsync transfer output is shown like this:<BR>
 
     host:/root root# apt-mirror-rsync -p -z
     Syncing mirror.aarnet.edu.au
@@ -113,7 +113,7 @@ If all the setup steps above are done, your disk is ready and the remote mirrors
     19963 amd64 pkgs using 216.07G. Need 209 pkgs. Downloading 1007.72MB.
       232.93M  23%    3.10MB/s    0:04:15  xfr#29, to-chk=180/239)
 
-You can see in this example the jammy-main-amd64 repo has 19963 packages configured and is already using 216GB on my drive. The new Packages file lists 209 updated packages with 1007MB to fetch. The <CODE>rsync</CODE> output gives a running progress output of total bytes fetched, a changing percentage, the download speed and how many files out of the 209 have been transferred so far. The percentage changes up and down because the rsync protocol is doing the 19963 files in smaller batches. You'll get used to reading it. The program is using 1024 byte units for calculations because it's not a storage vendor wanting to make their numbers look better. <CODE>rsync</CODE> also does this so it's logical to match that.<BR>
+You can see in this example the jammy-updates/main/binary-amd64 repo has 19963 packages configured and is already using 216GB on my drive. The new Packages file lists 209 updated packages with 1007MB to fetch. The <CODE>rsync</CODE> output gives a running progress output of total bytes fetched, a changing percentage, the download speed and how many files out of the 209 have been transferred so far. The percentage changes up and down because the rsync protocol is doing the 19963 files in smaller batches. You'll get used to reading it. The program is using 1024 byte units for calculations because it's not a storage vendor wanting to make their numbers look better. <CODE>rsync</CODE> also does this so it's logical to match that.<BR>
 
     Fetched new jammy-updates/main/binary-i386 Packages.
     Mirror synced archive.ubuntu.com/ubuntu jammy-updates main
@@ -126,9 +126,9 @@ Sometimes like above there will be new Packages files (the repo metadata files) 
 First Run Example
 -----------------
 
-The full output of a run of the script where the only files existing on the system are the script, it's configuration file and the mirror config file. Shown is the contents of the mirror configuration file, a display of what it will try to copy to local disk and then apt-mirror-rsync begins building the directory trees and starting the mirroring from the remote site. This example shows the gradual transfer of the focal OS release and all of the repos inside it. At the end a total of all the bytes transferred is given.
+Below is the full output of an initial run of the script where the only files existing on the system are the script, the script configuration file and the mirror config file. Shown is the contents of the mirror configuration file, a display of what it will try to copy to local disk and then apt-mirror-rsync begins building the directory trees and starting the mirroring from the remote site. This example shows the gradual transfer of the focal OS release and all of the repos inside it. At the end a total of all the bytes transferred is given.
 
-In normal use your directories will have been created the first time you mirrored that OS release, so you won't see that repeating again.
+In normal use your directory tree will have been created the first time you mirrored an OS release, so you won't see that repeating again.
 
     host:/root root# grep -v ^# /etc/apt/sources.rsync.d/mirror.aarnet.edu.au
     STATUS OK
@@ -216,7 +216,7 @@ In normal use your directories will have been created the first time you mirrore
 Normal Use
 ----------
 
-A subsequent run with the same parameters finishes much faster as all of the files have already been downloaded and the directories already exist. This example shows why rsync and smart file processing is so much faster. The original <CODE>wget</CODE> based mirror script would fully download all of the release metadata, even if it already existed, before it would start copying binaries. This could take 45 minutes or more if you mirror a lot of remote repositories.
+A subsequent run with the same parameters will finish much faster as all of the files have already been downloaded and the directories already exist. This example shows why rsync and smart file processing is so much more efficient. The original <CODE>apt-mirror</CODE>, (<CODE>wget</CODE> based), mirror script would fully download all of the release metadata, even if it already existed, before it would even start copying binaries. This could take 45 minutes or more to download over 1,000 metadata files if you mirror a lot of remote repositories.
 
     host:/root root# apt-mirror-rsync -p -z
     Syncing mirror.aarnet.edu.au
