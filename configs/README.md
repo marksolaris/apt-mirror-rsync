@@ -3,7 +3,9 @@ apt-mirror-rsync Mirror Configuration
 
 ### Mirror config files
 
-The default directory I use to store my mirror configs is <CODE>/etc/apt/sources.rsync.d</CODE>. In this directory are some sample mirror config files, built from the list at <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A>. Create the <CODE>/etc/apt/sources.rsync.d</CODE> directory and copy across an example file. The name of the file must match the remote hostname you are going to rsync from. When choosing a mirror look for the sites in your country and with the highest advertised speed. Some mirrors will refuse to serve rsync clients connecting from other countries.<BR>
+The default directory I use to store my mirror configs on the local mirror host is <CODE>/etc/apt/sources.rsync.d</CODE>.<BR>
+
+In this github area are some sample mirror config files, built from the list at <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A>. Create the <CODE>/etc/apt/sources.rsync.d</CODE> directory and copy across an example file. The name of the file must match the remote hostname you are going to rsync from. When choosing a mirror look for the sites in your country and with the highest advertised speed. Some mirrors will refuse to serve rsync clients connecting from other countries.<BR>
 
 There are over a dozen examples in the config/ directory (<A HREF="https://github.com/marksolaris/apt-mirror-rsync/tree/main/configs">https://github.com/marksolaris/apt-mirror-rsync/tree/main/configs</A>) with a variety of examples on using the <CODE>RELEASES_REMOTE_URL_COMPONENT</CODE> keyword to show you how the location translation works. Remember you only need one working upstream mirror per OS that you want to mirror, don't install all of the config files! We'll use <CODE>mirror.aarnet.edu.au</CODE> to demonstrate here.<BR>
 
