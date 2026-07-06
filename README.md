@@ -135,20 +135,19 @@ In normal use your directory tree will have been created the first time you mirr
     RELEASES_STATUS OK
     RELEASES_REMOTE_URL_COMPONENT ubuntu-archive
     RELEASES_LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
-    RELEASES focal focal-updates focal-backports focal-security
+    RELEASES focal
     RELEASES_REPO main restricted universe multiverse
     RELEASES_ARCH i386 amd64
     RELEASES_KEEP 2
 
     host:/root root# apt-mirror-rsync --config
-    mirror.aarnet.edu.au
-      status OK
+    mirror.aarnet.edu.au ubuntu-archive
       remote location rsync://mirror.aarnet.edu.au/ubuntu-archive
-      local directory /mirror/repos/archive.ubuntu.com/ubuntu
-        focal main                  amd64 keep: 2  i386 keep: 2
-        focal multiverse            amd64 keep: 2  i386 keep: 2
-        focal restricted            amd64 keep: 2  i386 keep: 2
-        focal universe              amd64 keep: 2  i386 keep: 2
+      local directory /airgap/repos/mirror/archive.ubuntu.com/ubuntu
+        focal main                     amd64 keep: 2 status: OK  i386 keep: 2 status: OK
+        focal multiverse               amd64 keep: 2 status: OK  i386 keep: 2 status: OK
+        focal restricted               amd64 keep: 2 status: OK  i386 keep: 2 status: OK
+        focal universe                 amd64 keep: 2 status: OK  i386 keep: 2 status: OK
 
     host:/root root# apt-mirror-rsync -p -z
     Syncing mirror.aarnet.edu.au
