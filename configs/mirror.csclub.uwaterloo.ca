@@ -1,128 +1,24 @@
 #
-# Definition file for all APT rsync mirrors on a remote host. The remote hostname is
-# the name of this file.
-# e.g. mirror.example.com
+# Definition file for all APT rsync mirrors on this remote host. The remote hostname is
+# the name of this file. e.g. mirror.example.com
 #
-# The keywords are case sensitive. Fields are seperated by spaces.
+# To understand these fields, see the README at
 #
-# STATUS keyword
-#     Set to 'OK' to run normally or 'IGNORE' to skip this rsync site.
-#     It's easier than having to move the config file elsewhere to disable it.
-#     Actually any value except 'OK' will skip this file so you can describe
-#     fully the issues with the mirror. 
-#         STATUS Very stale files
-#         STATUS Proxmox says rsync is hard. Darn.
-#         STATUS Slow 10Mbit connection
+# https://github.com/marksolaris/apt-mirror-rsync/blob/main/configs/README.md
 #
-# REMOTE_URL_COMPONENT keyword
-#     What to add to a URL to access the remote archive tree in rsync.
-#     e.g. ubuntu or ubuntu-archive
+# To use this mirror you need to be able to verify you can see the 'dists'
+# and 'pool' directories where the data is kept using:
 #
-#     You should be able to test view the dists and pool directories with:
-#     rsync --list-only --no-motd rsync://mirror.example.com/REMOTE_URL_COMPONENT/
-#
-# LOCAL_DIST_DIR keyword
-#     Location in the tree the where dist files for these repos will be stored.
-#     e.g. Location in tree for jammy dists/ will be archive.ubuntu.com/ubuntu
-#     You can updated this in each RELEASES section if required. Any following
-#     RELEASES sections in this file will re-use the latest defined value so
-#     update it if you needed to tune one specific repo. Thus for all of your
-#     mirrored APT repos (rsynced and otherwise) use the same location on the
-#     local disk that the vendor does in their apt-get sources files.
-#     as well.
-#     e.g.
-#         LOCAL_DIST_DIR ports.ubuntu.com/ubuntu-ports
-#         LOCAL_DIST_DIR security.ubuntu.com/ubuntu
-#         LOCAL_DIST_DIR packages.mozilla.org/apt
-#         LOCAL_DIST_DIR esm.ubuntu.com/apps/ubuntu
-#         LOCAL_DIST_DIR esm.ubuntu.com/infra/ubuntu
-#         LOCAL_DIST_DIR cli.github.com/packages
-#         LOCAL_DIST_DIR brave-browser-apt-release.s3.brave.com
-#
-# The three vars above can be tuned to allow mirror.remote.com/ubuntu-archive files
-# to be stored locally as 'original' archive.ubuntu.com/ubuntu. This simplifies client
-# sources.list configuration. You can add a host prefix in your /etc/apt/sources.list
-# file or change your DNS to reference your local mirror instead.
-#
-# e.g. The original
-# deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-#
-# can be changed to your local mirror:
-# deb http://mirror-apt.example.com/archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-#
-# or with your DNS resolving archive.ubuntu.com to 10.1.1.5 for example the
-# sources.list file contents can stay the same for all APT clients inside
-# your network. This lowers the admin burden for standing up new machines.
-#
-# RELEASES keyword
-#     Individual release sections where repositories and architectures can
-#     be tuned. You can have one, many or all releases defined on this line
-#     and then adjust the next two vars to get fine-tuned actions for those
-#     specific releases.
-#     e.g. You might want arm64 or amd64v3 debs for a certain OS release and
-#     the normal i386 and amd64 for all other releases, in another section.
-#
-#     To fetch arm64 for just Ubuntu resolute, have a section like:
-#         RELEASES resolute
-#         RELEASES_REPO main restricted universe multiverse
-#         RELEASES_ARCH arm64
-#         RELEASES_KEEP 3
-#
-#     A normal full archive of Ubuntu noble will look like:
-#         RELEASES noble noble-updates noble-backports noble-security
-#         RELEASES_REPO main restricted universe multiverse
-#         RELEASES_ARCH i386 amd64
-#         RELEASES_KEEP 3
-#
-#     RELEASES is defined first to start a new release section. If you ask
-#     "Why is my config broken" you will be reminded of this requirement.
-#
-# RELEASES_REPO keyword
-#     Repos to fetch from that specific release archive.
-#     e.g. Usually all of: main restricted universe multiverse
-#
-# RELEASES_ARCH keyword
-#     Architectures to fetch from only that release.
-#     e.g. One or more of: i386 amd64 arm64
-#
-# RELEASES_KEEP keyword
-#     This is the number of versions to keep for a particular package. This is
-#     used to ensure your disk space isn't wasted by caching old packages you
-#     will never install. An extreme example is the 101GB of files kept in the
-#     restricted/l/linux-restricted-modules directory, including sixty eight
-#     versions of linux-objects-nvidia-565-server-open. @ June 2026.
-#
-#     Version standards (hi Mozilla) aren't standard so while some bespoke
-#     version checks may be incorporated in the program, it will usually be
-#     extra careful in comparisons so packages aren't lost.
-#
-#     The best value to use is '2' so it keeps the very latest and n+1 of the
-#     package history so you can roll back if required. You can also tune the
-#     value for every release, repository and arch if you wish to define each
-#     RELEASES section explicitly in this file. If you don't specify one, the
-#     program has a default of '5'for each RELEASES without one.
-#
-#     If you over-clean and needed the older packages, increase the number
-#     and re-run the program to rsync them as normal.
-#
-#     This value is also used when deciding which packages to fetch. A deb
-#     file will be skipped if it's too old a version and there is already
-#     more recent packages on the dist. Obviously each release has its own
-#     package versions so a vendors pool/ directory can still have many
-#     versions of a package, but some are jammy, some are noble, some are
-#     resolute etc.
-
+# rsync --list-only --no-motd rsync://mirror.csclub.uwaterloo.ca/ubuntu/
 #
 # Don't add '=' equal signs to these definitions, use a single space to
 # seperate each of the keywords and values.
 #
-# Check access to the site with:
-# rsync --list-only --no-motd rsync://mirror.csclub.uwaterloo.ca/ubuntu/
+HOST_STATUS OK
 #
-STATUS OK
-REMOTE_URL_COMPONENT ubuntu
-LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
-#
+RELEASES_STATUS OK
+RELEASES_REMOTE_URL_COMPONENT ubuntu
+RELEASES_LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
 RELEASES resolute resolute-updates resolute-backports resolute-security
 RELEASES_REPO main restricted universe multiverse
 RELEASES_ARCH i386 amd64 arm64

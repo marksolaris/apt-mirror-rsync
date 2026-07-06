@@ -61,7 +61,7 @@ There are over a dozen examples in the config/ directory with a variety of <CODE
 
 The mirror config file contains a full description of each field, and in the case of the example <CODE>mirror.aarnet.net.au</CODE> file it's set to mirror all of the focal, jammy, noble and resolute Ubuntu releases. You likely don't want to have all of those OS releases so comment out the ones you don't want. FYI they take nearly 3TB to mirror all of them.<BR>
 
-Inside the file the <CODE>STATUS</CODE> field lets you leave a mirror definition file in-place in the <CODE>sources.rsync.d</CODE> directory and if the value isn't set to <CODE>OK</CODE> then the file contents will be ignored. It's simpler than having to move the file out of the directory like you need to do with the normal APT repo source files when you don't want them parsed.<BR>
+Inside the file the <CODE>HOST_STATUS</CODE> field lets you leave a mirror definition file in-place in the <CODE>sources.rsync.d</CODE> directory and if the value isn't set to <CODE>OK</CODE> then the file contents will be ignored. It's simpler than having to move the file out of the directory like you need to do with the normal APT repo source files when you don't want them parsed.<BR>
 
 A lot of the remote mirrors on the <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A> list will keep their files in a different path on the mirror site than where Canonical does. You can use the <CODE>REMOTE_URL_COMPONENT</CODE> and the <CODE>LOCAL_DIST_DIR</CODE> to create the mapping you want, fixing the problem. Keeping the destination for your local files the same as what a normal <CODE>apt-get</CODE> would want (i.e. <CODE>archive.ubuntu.com/ubuntu</CODE> makes it simpler for all of your local clients.
 
@@ -131,10 +131,11 @@ Below is the full output of an initial run of the script where the only files ex
 In normal use your directory tree will have been created the first time you mirrored an OS release, so you won't see that repeating again.
 
     host:/root root# grep -v ^# /etc/apt/sources.rsync.d/mirror.aarnet.edu.au
-    STATUS OK
+    HOST_STATUS OK
     REMOTE_URL_COMPONENT ubuntu-archive
     LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
     RELEASES focal
+    RELEASES_STATUS OK
     RELEASES_REPO main restricted universe multiverse
     RELEASES_ARCH i386 amd64
     RELEASES_KEEP 2
