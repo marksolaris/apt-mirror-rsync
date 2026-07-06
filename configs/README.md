@@ -59,7 +59,7 @@ This setting controls which releases you want to mirror from the remote host. To
 
 #### <CODE>RELEASES_REPO</CODE> keyword<BR>
 
-Inside each OS release is a set of standard sections called repositories. The default list for <CODE>focal</CODE> and all Ubuntu releases generally is <CODE>main restricted universe multiverse</CODE> so if you want to have healthy local mirrors keep this set the same. <CODE>RELEASES_REPO main restricted universe multiverse</CODE>.<BR>
+Inside each OS release is a set of standard sections called repositories. The default list for <CODE>focal</CODE> and all Ubuntu releases generally is <CODE>main restricted universe multiverse</CODE> so if you want to have healthy local mirrors keep this set the same. The full line would be: <CODE>RELEASES_REPO main restricted universe multiverse</CODE>.<BR>
 
 #### <CODE>RELEASES_ARCH</CODE> keyword<BR>
 
@@ -73,7 +73,7 @@ This setting controls how many versions of a package are retained on your local 
 
 Having all of these fields in each section lets you configure very fine-grained actions such as mirroring one specific release/repo/arch combination to a specific directory, if you thought that was a good idea. In normal use one section is enough to mirror all of the metadata files and binary files for an entire OS release such as <CODE>noble</CODE> or <CODE>resolute</CODE>.<BR>
 
-To demonstrate, here's how to mirror four <CODE>amd</CODE> OS release versions, and two <CODE>arm64</CODE> OS releases. Note the change of URL and local directory for the <CODE>arm64</CODE> sections. The one mirror config file can handle multiple scenarios, whatever the remote mirror does to present the archives.<BR>
+To demonstrate, here's how to mirror four <CODE>amd64/i386</CODE> OS release versions, and two <CODE>arm64</CODE> OS releases. Note the change of URL and local directory for the <CODE>arm64</CODE> sections. A single mirror config file can handle multiple scenarios, whatever the remote mirror does to present the archives.<BR>
 
     RELEASES_STATUS OK
     RELEASES_REMOTE_URL_COMPONENT ubuntu-archive
