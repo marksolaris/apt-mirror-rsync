@@ -132,10 +132,10 @@ In normal use your directory tree will have been created the first time you mirr
 
     host:/root root# grep -v ^# /etc/apt/sources.rsync.d/mirror.aarnet.edu.au
     HOST_STATUS OK
-    REMOTE_URL_COMPONENT ubuntu-archive
-    LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
-    RELEASES focal
     RELEASES_STATUS OK
+    RELEASES_REMOTE_URL_COMPONENT ubuntu-archive
+    RELEASES_LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
+    RELEASES focal focal-updates focal-backports focal-security
     RELEASES_REPO main restricted universe multiverse
     RELEASES_ARCH i386 amd64
     RELEASES_KEEP 2
