@@ -75,6 +75,8 @@ Having all of these fields in each section lets you configure very fine-grained 
 
 To demonstrate, here's how to mirror four <CODE>amd64/i386</CODE> OS release versions, and two <CODE>arm64</CODE> OS releases. Note the change of URL and local directory for the <CODE>arm64</CODE> sections. A single mirror config file can handle multiple scenarios, whatever the remote mirror does to present the archives.<BR>
 
+Note: Ubuntu is shifting their <CODE>arm64</CODE> archives across from <CODE>ports.ubuntu.com</CODE> to <CODE>archive.ubuntu.com</CODE> so keep on your toes to stay current with your mirroring. <CODE>resolute</CODE> has been completed, <CODE>noble</CODE> and <CODE>jammy</CODE> are next.<BR>
+
     RELEASES_STATUS OK
     RELEASES_REMOTE_URL_COMPONENT ubuntu-archive
     RELEASES_LOCAL_DIST_DIR archive.ubuntu.com/ubuntu
@@ -115,11 +117,12 @@ To demonstrate, here's how to mirror four <CODE>amd64/i386</CODE> OS release ver
     RELEASES_ARCH arm64
     RELEASES_KEEP 2
 
-    RELEASES_STATUS OK
-    RELEASES_REMOTE_URL_COMPONENT ubuntu-ports
-    RELEASES_LOCAL_DIST_DIR ports.ubuntu.com/ubuntu-ports
-    RELEASES resolute resolute-updates resolute-backports resolute-security
-    RELEASES_REPO main restricted universe multiverse
-    RELEASES_ARCH arm64
-    RELEASES_KEEP 2
-
+    # No more ports/resolute/Releases files folks
+    # https://discourse.ubuntu.com/t/ubuntu-on-arm-summer-26-update/84872
+    ### RELEASES_STATUS OK
+    ### RELEASES_REMOTE_URL_COMPONENT ubuntu-ports
+    ### RELEASES_LOCAL_DIST_DIR ports.ubuntu.com/ubuntu-ports
+    ### RELEASES resolute resolute-updates resolute-backports resolute-security
+    ### RELEASES_REPO main restricted universe multiverse
+    ### RELEASES_ARCH arm64
+    ### RELEASES_KEEP 2

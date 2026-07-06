@@ -57,10 +57,12 @@ RELEASES_REPO main restricted universe multiverse
 RELEASES_ARCH arm64
 RELEASES_KEEP 2
 #
-RELEASES_STATUS OK
-RELEASES_REMOTE_URL_COMPONENT ubuntu-ports
-RELEASES_LOCAL_DIST_DIR ports.ubuntu.com/ubuntu-ports
-RELEASES resolute resolute-updates resolute-backports resolute-security
-RELEASES_REPO main restricted universe multiverse
-RELEASES_ARCH arm64
-RELEASES_KEEP 2
+# No more ports/resolute/Releases files folks
+# https://discourse.ubuntu.com/t/ubuntu-on-arm-summer-26-update/84872
+### RELEASES_STATUS OK
+### RELEASES_REMOTE_URL_COMPONENT ubuntu-ports
+### RELEASES_LOCAL_DIST_DIR ports.ubuntu.com/ubuntu-ports
+### RELEASES resolute resolute-updates resolute-backports resolute-security
+### RELEASES_REPO main restricted universe multiverse
+### RELEASES_ARCH arm64
+### RELEASES_KEEP 2

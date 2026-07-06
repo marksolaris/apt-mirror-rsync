@@ -476,6 +476,9 @@ sub show_configs {
     } # mirror
 }
 
+# arm64 merging from ports to archive
+# https://discourse.ubuntu.com/t/ubuntu-on-arm-summer-26-update/84872
+# https://github.com/canonical/cloud-init/issues/6825
 sub dist_stat {
     my ($dist_stat_repo) = @_;
     my %STATS = ();
@@ -506,17 +509,22 @@ sub dist_stat {
             my $arch = $pkg_file;
             $arch =~ s#.*/binary\-##;
             $arch =~ s#/Packages##;
-            $STATS{$release_location}{'release'}{$pretty_release}{'repo'}{$repo}{'arch'}{$arch} = 1;
+            $STATS{$release_location}{'release'}{$pretty_release}{'repo'}{$repo}{'arch'}{$arch}{'seen'} = 1;
         }
     }
     if (not $release_count) {
         print STDOUT "No viable release mirrors were found. Have you finished syncing?\n";
+    } else {
+        print STDOUT "Archives scanned. Loading package data...\r";
+        select(STDOUT)->flush();
     }
     my $max_release_host_length = 0;
     my $max_release_length = 0;
     my $max_repo_length = 0;
     my $max_arch_length = 0;
     my $max_need_length = 9;
+    my $total_files = 0;
+    my $total_size = 0;
     my $pkgs_width = 6;
     my $bytes_width = 8;
     my $deduct = 15;
@@ -528,19 +536,55 @@ sub dist_stat {
             foreach my $repo (keys %{ $STATS{$release_location}{'release'}{$release}{'repo'} }) {
                 if (length($repo) > $max_repo_length) { $max_repo_length = length($repo); }
                 foreach my $arch (keys %{ $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
+                    my $arch_total_files = 0;
+                    my $arch_total_size = 0;
                     if (length($arch) > $max_arch_length) { $max_arch_length = length($arch); }
+                    my $packages_file = "${APT_MIRROR_DIR}/${release_location}/dists/${release}/${repo}/binary-${arch}/Packages";
+                    if (not -f $packages_file) { print STDOUT "missing ${packages_file}\n"; }
+                    open(PACKAGES, $packages_file);
+                    while ($pkg_line = <PACKAGES>) {
+                        chomp($pkg_line);
+                        if ($pkg_line =~ /^Filename:\s+/) {
+                            my $file = $pkg_line; $file =~ s/^Filename:\s+//;
+                            my $size = -s "${APT_MIRROR_DIR}/${release_location}/${file}";
+                            if ($debug) { &log("DEBUG: dist_stat: file: ${APT_MIRROR_DIR}/${release_location}/${file}"); }
+                            $arch_total_files++;
+                            $arch_total_size += $size;
+                        }
+                    }
+                    close(PACKAGES);
+                    $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'}{$arch}{'total_files'} = $arch_total_files;
+                    $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'}{$arch}{'total_size'} = $arch_total_size;
+                    $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'total_files'} += $arch_total_files;
+                    $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'total_size'} += $arch_total_size;
+                    $STATS{$release_location}{'release'}{$release}{'total_files'} += $arch_total_files;
+                    $STATS{$release_location}{'release'}{$release}{'total_size'} += $arch_total_size;
+                    $STATS{$release_location}{'total_files'} += $arch_total_files;
+                    $STATS{$release_location}{'total_size'} += $arch_total_size;
+                    $total_files += $arch_total_files;
+                    $total_size += $arch_total_size;
                 }
             }
         }
+    }
+    if ($debug >= 6) { # Save STATS config
+        open(LOGFILE, ">>${LOGFILE}");
+        print LOGFILE Dumper(\%STATS);
+        close(LOGFILE);
     }
     my $total_width = ($max_release_length + $max_repo_length + $max_arch_length + $max_need_length + $pkgs_width + $bytes_width + $width_adjustment);
     &log("DEBUG: total_width: ${total_width}");
     foreach my $release_location (sort keys %STATS) {
         my $release_hostname = $release_location;
         $release_hostname =~ s#/.*##;
+        my $release_total_files = $STATS{$release_location}{'total_files'};
+        my $release_total_size = $STATS{$release_location}{'total_size'};
+        my $release_total_files_pretty = &nicenum($release_total_files);
+        my $release_total_size_pretty = &kmg_size($release_total_size);
+        my $release_banner = "${release_location}  ${release_total_files_pretty} files  ${release_total_size_pretty}";
         &log("DEBUG: box: doing release_location: ${release_location}");
         print STDOUT "+" . "-" x $total_width . "+\n";
-        print STDOUT "| ${release_location}"    . " " x ($total_width - length($release_location) -1) . "|\n";
+        print STDOUT "| ${release_banner}"    . " " x ($total_width - length($release_banner) -1) . "|\n";
         print STDOUT "+" . "-" x $total_width . "+\n";
         print STDOUT "|" . " Release"       . " " x ($max_release_length - 6);
         print STDOUT "|" . " Repo"          . " " x ($max_repo_length - 3);
@@ -574,25 +618,11 @@ sub dist_stat {
                 printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", $repo;
                 $shown_repo++;
                 foreach my $arch (sort keys %{ $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'} }) {
-                    my $arch_total_files = 0;
-                    my $arch_total_size = 0;
+                    my $arch_total_files = $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'}{$arch}{'total_files'};
+                    my $arch_total_size = $STATS{$release_location}{'release'}{$release}{'repo'}{$repo}{'arch'}{$arch}{'total_size'};
                     if (not $shown_release) { printf STDOUT "| %-${max_release_length}.${max_release_length}s ", " "; }
                     if (not $shown_repo) { printf STDOUT "| %-${max_repo_length}.${max_repo_length}s ", " "; }
                     printf STDOUT "| %-${max_arch_length}.${max_arch_length}s ", $arch;
-                    my $packages_file = "${APT_MIRROR_DIR}/${release_location}/dists/${release}/${repo}/binary-${arch}/Packages";
-                    if (not -f $packages_file) { print STDOUT "missing ${packages_file}\n"; }
-                    open(PACKAGES, $packages_file);
-                    while ($pkg_line = <PACKAGES>) {
-                        chomp($pkg_line);
-                        if ($pkg_line =~ /^Filename:\s+/) {
-                            my $file = $pkg_line; $file =~ s/^Filename:\s+//;
-                            my $size = -s "${APT_MIRROR_DIR}/${release_location}/${file}";
-                            if ($debug) { &log("DEBUG: dist_stat: file: ${APT_MIRROR_DIR}/${release_location}/${file}"); }
-                            $arch_total_files++;
-                            $arch_total_size += $size;
-                        }
-                    }
-                    close(PACKAGES);
                     my $arch_total_files_pretty = &nicenum($arch_total_files);
                     my $arch_total_size_pretty = &kmg_size($arch_total_size);
                     printf STDOUT " | %${pkgs_width}.${pkgs_width}s", $arch_total_files_pretty;
