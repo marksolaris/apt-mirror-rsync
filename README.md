@@ -11,15 +11,18 @@ If you want to get going quickly, these steps will install the script, the scrip
 
 You will want to observe the progress the first time via <CODE>--progress</CODE>, and usually want to only see things that change on the system so use <CODE>--ignore-zero</CODE> (aka <CODE>-p -z</CODE>). Afterwards view how much data is being used by all the repos in your mirror tree.<BR>
 
+    git clone https://github.com/marksolaris/apt-mirror-rsync.git
+    cd apt-mirror-rsync
+
     cp apt-mirror-rsync /usr/local/bin/.
     chmod 755 /usr/local/bin/apt-mirror-rsync
 
     cp apt-mirror-rsync.conf /etc/apt/.
-    vi /etc/apt/apt-mirror-rsync.conf
+    vi /etc/apt/apt-mirror-rsync.conf                 (Edit configs to suit)
 
     mkdir -p /etc/apt/sources.rsync.d
     cp configs/<sitename> /etc/apt/sources.rsync.d/.
-    vi /etc/apt/sources.rsync.d/<sitename>
+    vi /etc/apt/sources.rsync.d/<sitename>            (Edit configs to suit)
 
     apt-mirror-rsync --list-mirrors
     apt-mirror-rsync --config
@@ -31,7 +34,12 @@ Installation
 
 ##### Script Install
 
-As the <CODE>root</CODE> user copy the <CODE>apt-mirror-rsync</CODE> script to your system's <CODE>bin</CODE> directory, usually <CODE>/usr/local/bin</CODE>.<BR>
+First download this git repo to your local machine.<BR>
+
+    git clone https://github.com/marksolaris/apt-mirror-rsync.git
+	cd apt-mirror-rsync
+
+If required, change to the <CODE>root</CODE> user and copy the <CODE>apt-mirror-rsync</CODE> script to your system's <CODE>bin</CODE> directory, usually <CODE>/usr/local/bin</CODE>.<BR>
 
     cp apt-mirror-rsync /usr/local/bin/.
     chmod 755 /usr/local/bin/apt-mirror-rsync
@@ -64,6 +72,10 @@ The mirror config file contains a full description of each field, and in the cas
 Inside the file the <CODE>HOST_STATUS</CODE> field lets you leave a mirror definition file in-place in the <CODE>sources.rsync.d</CODE> directory and if the value isn't set to <CODE>OK</CODE> then the file contents will be ignored. It's simpler than having to move the file out of the directory like you need to do with the normal APT repo source files when you don't want them parsed.<BR>
 
 A lot of the remote mirrors on the <A HREF="https://launchpad.net/ubuntu/+archive">https://launchpad.net/ubuntu/+archivemirrors</A> list will keep their files in a different path on the mirror site than where Canonical does. You can use the <CODE>REMOTE_URL_COMPONENT</CODE> and the <CODE>LOCAL_DIST_DIR</CODE> to create the mapping you want, fixing the problem. Keeping the destination for your local files the same as what a normal <CODE>apt-get</CODE> would want (i.e. <CODE>archive.ubuntu.com/ubuntu</CODE> makes it simpler for all of your local clients.
+
+It's wise to test the chosen remote mirror to ensure it's providing the rsync mirror, and serving your IP. Some sites limit downloads to their local ISP or country. If you're copying a config file from this site, it'll give hints on how to test.
+
+    rsync --list-only --no-motd rsync://mirror.aarnet.edu.au/ubuntu-archive/
 
 Once you have tuned your mirror config file you should verify that your settings are sane and what you intended.  You can list your configured mirror names with <CODE>apt-mirror-rsync --list-mirrors</CODE>. If that's working then you can list the contents of the mirrors with <CODE>apt-mirror-rsync --config</CODE>. That will show you what the program will attempt to mirror down to your local disk.<BR>
 
