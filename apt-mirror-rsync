@@ -705,7 +705,6 @@ sub process_rsync_mirror_config_file {
     foreach my $url (sort keys %{ $REPOS{$remote_host}{"url"} }) {
         # archive.ubuntu.com/ubuntu ports.ubuntu.com/ubuntu-ports archive.ubuntu.com/releases
         foreach my $dir (sort keys %{ $REPOS{$remote_host}{"url"}{$url}{"dir"} }) {
-
             my $special_dist_copy_host = $dir; $special_dist_copy_host =~ s#/.*##g;
             # Don't copy local dists for hosts which store the repo binaries in there
             if (defined($SPECIAL_DIST_COPY{$special_dist_copy_host})) {
@@ -717,7 +716,6 @@ sub process_rsync_mirror_config_file {
                 }
                 $special_dist_copy++;
             }
-
             # Copy live dists into work dir, should be the same if we already did it
             # before, otherwise we require the data to begin a remote mirror. If it
             # doesn't exist yet then we will also start creating the repo locally.
@@ -744,14 +742,20 @@ sub process_rsync_mirror_config_file {
             # resolute resolute-updates resolute-backports resolute-security
             my $releases = join(' ', sort keys %{ $REPOS{$remote_host}{"url"}{$url}{"dir"}{$dir}{"release"} });
             if ($debug) { &log("DEBUG: ${remote_host} releases ${releases}"); }
+
+            # For each release we need to bulk mirror all of the files under
+            # it in the dists tree. The release tier of the tree contains a
+            # lot of metadata files that the child repos require. This then
+            # simplifies the repo syncing as just the pool files are needed.
+
             foreach my $release (split(/ /, $releases)) {
                 my $total_fetched_release = 0;
                 chomp($release);
                 next unless (length($releases));
                 # if ($debug >= 2) { &log("DEBUG: process_rsync_mirror_config_file() working on ${remote_host} release ${release}"); }
-
                 # /data/dist_temp/archive.ubuntu.com/ubuntu/dists/jammy
                 my $release_work_dir = "${DIST_WORK_DIR}/${dir}/dists/${release}";
+                my $release_prod_dir = "${APT_MIRROR_DIR}/${dir}/dists/${release}";
                 if (not -d $release_work_dir) {
                     if ($debug) { &log("DEBUG: mkdir -p ${release_work_dir}"); }
                     my $time_now = "";
@@ -759,18 +763,83 @@ sub process_rsync_mirror_config_file {
                     if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${release_work_dir}\n"; }
                     if (not $dry_run) { `mkdir -p ${release_work_dir}`; }
                 }
-
+                if (not -d $release_prod_dir) {
+                    if ($debug) { &log("DEBUG: mkdir -p ${release_prod_dir}"); }
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${release_prod_dir}\n"; }
+                    if (not $dry_run) { `mkdir -p ${release_prod_dir}`; }
+                }
+                ##################################################################
+                #
+                # Transfer the current local mirror release files to the work dir.
+                #
+                ##################################################################
+                $rsync_cmd = "rsync --archive --recursive --exclude '*.deb' --delete --update --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${release_prod_dir}/ ${release_work_dir}/.";
+                if ($dry_run) {
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
+                    &log("DEBUG: file sync: ${rsync_cmd}");
+                } else {
+                    my @local_flist = `${rsync_cmd}`;
+                    my $fcnt = scalar @local_flist;
+                    if ($debug) { &log("DEBUG: ${fcnt} new files/dirs from current ${dir}/dists/${release}"); }
+                    if ($debug >= 3) {
+                        foreach my $flist_line (@local_flist) {
+                            chomp($flist_line);
+                            &log("DEBUG:     ${flist_line}");
+                        }
+                    }
+                    if ($progress) {
+                        if ($normal && (not $skip_zero)) {
+                            my $time_now = "";
+                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                            print STDOUT "${time_now}Local sync ${dir}/dists/${release} release to ${DIST_WORK_DIR}/...\n";
+                        }
+                    }
+                }
                 # main restricted universe multiverse
-                my $repos = join(' ', sort keys %{ $REPOS{$remote_host}{"url"}{$url}{"dir"}{$dir}{"release"}{$release}{"repo"} });
-                foreach my $repo (split(/ /, $repos)) {
+                my @repos = (sort keys %{ $REPOS{$remote_host}{"url"}{$url}{"dir"}{$dir}{"release"}{$release}{"repo"} });
+                ####################################################################
+                #
+                # Download the latest remote release metadata files to the work dir.
+                #
+                ####################################################################
+                my $excluded_repos = "";
+                $rsync_cmd = "rsync --no-motd --open-noatime --archive --recursive ${excluded_repos} --delete --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 rsync://${remote_host}/${url}/dists/${release}/ ${release_work_dir}/";
+                if ($dry_run) {
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
+                    &log("DEBUG: file sync: ${rsync_cmd}");
+                } else {
+                    if ($progress) {
+                        if ($normal && (not $skip_zero)) {
+                            my $time_now = "";
+                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                            print STDOUT "${time_now}Remote sync ${dir}/dists/${release} metadata files to ${DIST_WORK_DIR}/...\n";
+                        }
+                    }
+                    my @local_flist = `${rsync_cmd}`;
+                    my $fcnt = scalar @local_flist;
+                    if ($debug) { &log("DEBUG: ${fcnt} new release metadata files/dirs from remote ${dir}/dists/${release}"); }
+                    if ($debug >= 3) {
+                        foreach my $flist_line (@local_flist) {
+                            chomp($flist_line);
+                            &log("DEBUG:     ${flist_line}");
+                        }
+                    }
+                }
+                foreach my $repo (@repos) {
                     chomp($repo);
                     next unless (length($repo));
                     # if ($debug >= 2) { &log("DEBUG: working on ${remote_host} release ${release} repo ${repo}"); }
                     my $repo_work_dir = "${release_work_dir}/${repo}";
-                    my $repo_prod_dir = "${APT_MIRROR_DIR}/${dir}/dists/${release}/${repo}";
+                    my $repo_prod_dir = "${release_prod_dir}/${repo}";
                     my $archs = join(' ', sort keys %{ $REPOS{$remote_host}{"url"}{$url}{"dir"}{$dir}{"release"}{$release}{"repo"}{$repo}{"arch"} });
 
-                    if (not -d $repo_prod_dir) { # Happens on greenfields
+                    if (not -d $repo_prod_dir) { # Happens on greenfields, release_prod_dir was created
                         if ($debug) { &log("DEBUG: mkdir -p ${repo_prod_dir}"); }
                         my $time_now = "";
                         if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
@@ -778,7 +847,6 @@ sub process_rsync_mirror_config_file {
                         if (not $dry_run) { `mkdir -p ${repo_prod_dir}`; }
                         $greenfields++;
                     }
-
                     if (not -d $repo_work_dir) {
                         if ($debug) { &log("DEBUG: mkdir -p ${repo_work_dir}"); }
                         my $time_now = "";
@@ -786,43 +854,17 @@ sub process_rsync_mirror_config_file {
                         if ($normal && ($progress or $dry_run)) { print STDOUT "${time_now}mkdir -p ${repo_work_dir}\n"; }
                         if (not $dry_run) { `mkdir -p ${repo_work_dir}`; }
                     }
-
                     # By excluding *.deb we can safely cache dists files for the
                     # weird mirrors. This cmd also syncs the binary-{arch} files
                     # for archs we won't be caching.
 
-                    ################################################################
+                    ##################################################################
                     #
-                    # Transfer the current local mirror dists files to the work dir.
-                    # This syncs over all archs that are on the local disk. Doing this
-                    # here as it would scrub other (updated) archs in the loop below.
+                    # Repo dist files were prod->work synced and then mirror updated
+                    # in the release section above. Unpack any Packages files we need.
+                    # The release sync --delete cleaned up any old Packages.
                     #
-                    ################################################################
-                    $rsync_cmd = "rsync --archive --recursive --exclude '*.deb' --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${repo_prod_dir}/ ${repo_work_dir}/.";
-                    if ($dry_run) {
-                        my $time_now = "";
-                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                        print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
-                        &log("DEBUG: file sync: ${rsync_cmd}");
-                    } else {
-                        my @local_flist = `${rsync_cmd}`;
-                        my $fcnt = scalar @local_flist;
-                        if ($debug) { &log("DEBUG: ${fcnt} new files/dirs from current ${dir}/dists/${release}"); }
-                        if ($debug >= 3) {
-                            foreach my $flist_line (@local_flist) {
-                                chomp($flist_line);
-                                &log("DEBUG:     ${flist_line}");
-                            }
-                        }
-                        # Full location is 'to ${release_work_dir}/${repo}'
-                        if ($progress) {
-                            if ($normal && (not $skip_zero)) {
-                                my $time_now = "";
-                                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                print STDOUT "${time_now}Local sync ${dir}/dists/${release}/${repo} to ${DIST_WORK_DIR}/...\n";
-                            }
-                        }
-                    }
+                    ##################################################################
                     # i386 amd64
                     my $repo_fcnt = 0;
                     my $bad_exit = 0;
@@ -834,6 +876,8 @@ sub process_rsync_mirror_config_file {
                         my $arch_work_dir = "${repo_work_dir}/binary-${arch}";
                         my $arch_prod_dir = "${repo_prod_dir}/binary-${arch}";
                         my $packages_file = "${arch_work_dir}/Packages";
+                        # Not wanting to invent a Packages file in a repo, but we need the contents
+                        my $work_packages_file = "${DIST_WORK_DIR}/work_files/${release}_${repo}_binary_${arch}.Packages";
                         if (not -d $arch_work_dir) { # Happens on greenfields
                             if ($debug) { &log("DEBUG: mkdir -p ${arch_work_dir}"); }
                             my $time_now = "";
@@ -854,85 +898,27 @@ sub process_rsync_mirror_config_file {
                                 if ($dry_run) {
                                     my $time_now = "";
                                     if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                    if ($normal) { print STDOUT "${time_now}gunzip -c ${packages_file}.gz > ${packages_file}\n"; }
-                                    &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}");
+                                    if ($normal) { print STDOUT "${time_now}gunzip -c ${packages_file}.gz > ${work_packages_file}\n"; }
+                                    &log("DEBUG: gunzip -c ${packages_file}.gz > ${work_packages_file}");
                                 } else {
-                                    `gunzip -c ${packages_file}.gz > ${packages_file}`;
-                                    if ($debug) { &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}"); }
+                                    `gunzip -c ${packages_file}.gz > ${work_packages_file}`;
+                                    if ($debug) { &log("DEBUG: gunzip -c ${packages_file}.gz > ${work_packages_file}"); }
                                 }
                             } else {
                                 if (-f "${packages_file}.xz") {
                                     if ($dry_run) {
                                         my $time_now = "";
                                         if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                        if ($normal) { print STDOUT "${time_now}xzcat -c ${packages_file}.gz > ${packages_file}\n"; }
-                                        &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}");
+                                        if ($normal) { print STDOUT "${time_now}xzcat -c ${packages_file}.xz > ${work_packages_file}\n"; }
+                                        &log("DEBUG: xzcat -c ${packages_file}.xz > ${work_packages_file}");
                                     } else {
-                                        `xzcat -c ${packages_file}.xz > ${packages_file}`;
-                                        if ($debug) { &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}"); }
+                                        `xzcat -c ${packages_file}.xz > ${work_packages_file}`;
+                                        if ($debug) { &log("DEBUG: xzcat -c ${packages_file}.xz > ${work_packages_file}"); }
                                     }
                                 }
                             }
-                        }
-                        ############################################################
-                        #
-                        # Update (or initially fetch) the release-repo-arch files from the upstream mirror
-                        #
-                        ############################################################
-                        $rsync_cmd = "rsync --no-motd --open-noatime --archive --recursive --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 rsync://${remote_host}/${url}/dists/${release}/${repo}/binary-${arch}/ ${arch_work_dir}/";
-                        if ($dry_run) {
-                            $rsync_cmd =~ s/atime/atime --dry-run/;
-                            my $time_now = "";
-                            if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                            if ($normal) { print STDOUT "${time_now}Packages sync: ${rsync_cmd}\n"; }
-                        }
-                        if ($debug) {
-                            &log("DEBUG: Packages sync: ${rsync_cmd}");
-                        }
-                        my @pkgs_flist = `${rsync_cmd}`;
-                        my $fcnt = scalar @pkgs_flist;
-                        $repo_fcnt += $fcnt;
-                        if ($debug) { &log("DEBUG: ${fcnt} new files/dirs from remote in ${release}/${repo}/binary-${arch}"); }
-                        my $have_uncompressed = 0;
-                        foreach my $flist_line (@pkgs_flist) {
-                            chomp($flist_line);
-                            if ($debug >= 3) { &log("DEBUG:     ${flist_line}"); }
-                            if ($flist_line eq "Packages.gz") { # We fetched some updates to merge
-                                if ($dry_run) {
-                                    my $time_now = "";
-                                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                    if ($normal) { print STDOUT "${time_now}gunzip -c ${packages_file}.gz > ${packages_file}\n"; }
-                                    &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}");
-                                    $have_uncompressed++;
-                                } else {
-                                    `gunzip -c ${packages_file}.gz > ${packages_file}`;
-                                    if ($debug) { &log("DEBUG: gunzip -c ${packages_file}.gz > ${packages_file}"); }
-                                    $have_uncompressed++;
-                                }
-                            } else {
-                                if (($flist_line eq "Packages.xz") && (not $have_uncompressed)) {
-                                    if ($dry_run) {
-                                        my $time_now = "";
-                                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                        if ($normal) { print STDOUT "${time_now}xzcat -c ${packages_file}.gz > ${packages_file}\n"; }
-                                        &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}");
-                                    } else {
-                                        `xzcat -c ${packages_file}.xz > ${packages_file}`;
-                                        if ($debug) { &log("DEBUG: xzcat -c ${packages_file}.gz > ${packages_file}"); }
-                                    }
-                                }
-                            }
-                        }
-                        if ($metasync) { next; } # Fetch more Packages files
-                        my $update_msg = "";
-                        if ($progress) {
-                            if ($fcnt) {
-                                my $time_now = "";
-                                if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                $update_msg = "${time_now}Fetched new ${release}/${repo}/binary-${arch} Packages.\n";
-                                if ($normal) { print STDOUT $update_msg; }
-                                $update_msg = "";
-                            }
+                        } else {
+                            `/bin/cp ${packages_file} ${work_packages_file}`;
                         }
                         ############################################################
                         #
@@ -940,9 +926,9 @@ sub process_rsync_mirror_config_file {
                         #
                         ############################################################
                         if ($debug) {
-                            &log("DEBUG: Parsing: ${packages_file}");
+                            &log("DEBUG: Parsing: ${work_packages_file}");
                         }
-                        open(PACKAGES, $packages_file);
+                        open(PACKAGES, $work_packages_file);
                         my $pkg = "";
                         my $file = "";
                         my $size = "";
@@ -1004,13 +990,14 @@ sub process_rsync_mirror_config_file {
                             my $need_bytes_pretty = &kmg_size($need_bytes);
                             my $time_now = "";
                             if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                            $update_msg = "${time_now}${pkg_cnt} ${arch} pkgs using ${have_bytes_pretty}";
+                            $update_msg = "${time_now}${release}/${repo}/${arch}  ";
+                            $update_msg .= "${time_now}${pkg_cnt} ${arch} pkgs using ${have_bytes_pretty}";
                             if ($missing) {
                                 $update_msg .= ". Need ${missing} pkgs. Downloading ${need_bytes_pretty}B";
                             }
                             &log("INFO: Fetching ${uniq}");
                             &log("INFO: ${update_msg}");
-                            $update_msg .= ".\n";
+                            $update_msg .= "\n";
                             if ($normal) { print STDOUT $update_msg unless ((not $missing) && $skip_zero); }
                         }
                         ############################################################
@@ -1112,51 +1099,45 @@ sub process_rsync_mirror_config_file {
                             $total_fetched_release += $need_bytes;
                         }
                     } # arch
-                    ################################################################
-                    #
-                    # Save updated meta files from the mirror for this repo. Doing it
-                    # this fine grained so as to retain effort done and not overload
-                    # the mirror hosts. Each repo in the release is whole, though some
-                    # might claim all release repos have to be whole before shared to
-                    # APT clients. 
-                    #
-                    ################################################################
-                    if ($signal_seen || $bad_exit) {
+                } # repo
+                ################################################################
+                #
+                # Copy all the release meta files to prod area.
+                #
+                ################################################################
+                if ($signal_seen || $bad_exit) {
+                    my $time_now = "";
+                    if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
+                    print STDOUT "${time_now}Abnormal exit. Not updating mirror with metadata.\n";
+                    if ($debug) { &log("DEBUG: Abnormal exit. Not updating metadata for ${release}"); }
+                } else {
+                    # Copy back the new Packages etc files from the work dir to the local mirror.
+                    $rsync_cmd = "rsync --archive --recursive --delete --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${release_work_dir}/ ${APT_MIRROR_DIR}/${dir}/dists/${release}/.";
+                    if ($dry_run) {
                         my $time_now = "";
                         if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                        print STDOUT "${time_now}Abnormal exit. Not updating mirror with metadata.\n";
-                        if ($debug) { &log("DEBUG: Abnormal exit. Not updating metadata for ${release}/${repo}"); }
+                        print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
+                        &log("DEBUG: file sync: ${rsync_cmd}");
                     } else {
-                        if ($repo_fcnt) {
-                            # Copy back the new Packages etc files from the work dir to the local mirror.
-                            $rsync_cmd = "rsync --archive --recursive --exclude '*.deb' --chown=${FILE_OWNERSHIP} --info=flist0,name1,misc0 ${release_work_dir}/${repo}/ ${APT_MIRROR_DIR}/${dir}/dists/${release}/${repo}/.";
-                            if ($dry_run) {
+                        my @local_flist = `${rsync_cmd}`;
+                        my $fcnt = scalar @local_flist;
+                        if ($debug) { &log("DEBUG: ${fcnt} new files/dirs updated in ${APT_MIRROR_DIR}/${dir}/dists/${release}"); }
+                        if ($debug >= 3) {
+                            foreach my $flist_line (@local_flist) {
+                                chomp($flist_line);
+                                &log("DEBUG:     ${flist_line}");
+                            }
+                        }
+                        if ($progress) {
+                            if (not $skip_zero) {
                                 my $time_now = "";
                                 if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                print STDOUT "${time_now}file sync: ${rsync_cmd}\n";
-                                &log("DEBUG: file sync: ${rsync_cmd}");
-                            } else {
-                                my @local_flist = `${rsync_cmd}`;
-                                my $fcnt = scalar @local_flist;
-                                if ($debug) { &log("DEBUG: ${fcnt} new files/dirs updated in ${APT_MIRROR_DIR}/${dir}/dists/${release}/${repo}"); }
-                                if ($debug >= 3) {
-                                    foreach my $flist_line (@local_flist) {
-                                        chomp($flist_line);
-                                        &log("DEBUG:     ${flist_line}");
-                                    }
-                                }
-                                if ($progress) {
-                                    # if (not $skip_zero) {
-                                        my $time_now = "";
-                                        if ($show_times) { $time_now = &ymdhms_timestamp . " "; }
-                                        print STDOUT "${time_now}Mirror synced ${dir} ${release} ${repo}\n";
-                                        if ($debug) { &log("DEBUG: Updated mirror wth ${release_work_dir}/${repo}"); }
-                                    # }
-                                }
+                                print STDOUT "${time_now}Mirror synced ${dir} ${release}\n";
+                                if ($debug) { &log("DEBUG: Updated mirror wth ${release_work_dir}"); }
                             }
-                        } # repo_fcnt
-                    } # exit check
-                } # repo
+                        }
+                    }
+                } # exit check
                 $total_fetched_mirror += $total_fetched_release;
                 if ($total_fetched_release && $normal) {
                     if ($progress) {
